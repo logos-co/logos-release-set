@@ -1,0 +1,252 @@
+name: Validate and publish release set
+
+# Manual only. `main` holds CHANGE-ME placeholders and is expected to fail the
+# pin check immediately; run this from a release branch with the versions
+# filled in.
+#
+#   1. resolve   — every pin -> repo url, commit, tag, download url, checksum,
+#                  CI run. Produces release-set.lock.json.
+#   2. doctests  — the release set validated on linux-x86_64, linux-arm64 and
+#                  macOS arm64, using only released binaries and catalog
+#                  packages. Specs whose artifacts are missing for a platform
+#                  are skipped, not failed.
+#   3. publish   — on green, a GitHub release with the lock, the reports, and
+#                  a description linking every artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Resolve and validate, but do not publish a release"
+        type: boolean
+        default: false
+      specs:
+        description: "Space-separated spec names to run (default: all that apply)"
+        type: string
+        default: ""
+
+concurrency:
+  group: release-set-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    name: Resolve the release set
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve every pin
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/resolve.py release-set.json -o release-set.lock.json
+          version="$(python3 -c "import json;print(json.load(open('release-set.lock.json'))['version'])")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "### Release set \`$version\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarise what was resolved
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          lock = json.load(open("release-set.lock.json"))
+          print("\n| Component | Pin | Commit |\n|---|---|---|")
+          for group in ("apps", "devUtils"):
+              for item in lock[group]:
+                  print(f"| {item['name']} | `{item['tag']}` | `{(item['commit'] or '')[:10]}` |")
+          for group in ("modules", "uiApps"):
+              for item in lock[group]:
+                  print(f"| {item['name']} | `{item['version']}` | `{(item['commit'] or '')[:10]}` |")
+          gaps = lock.get("platformGaps", [])
+          if gaps:
+              print("\n**Platform gaps**\n")
+              for gap in gaps:
+                  print(f"- {gap['reason']}")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-set-lock
+          path: release-set.lock.json
+          if-no-files-found: error
+
+  doctests:
+    name: Validate (${{ matrix.platform }})
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-latest
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: macos-arm64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-set-lock
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          # Read-only public caches — no tokens needed. They carry the probe
+          # modules' build closure and the inspector-enabled Basecamp bundle.
+          extra-conf: |
+            extra-substituters = https://cache.nix.logos.co/public
+            extra-trusted-public-keys = public:Z1wyVBEx8PHbXujYB52Mysv9Rd8rWIhyQ3bQyef9yy4=
+            fallback = true
+
+      # The portable bundle carries its own Qt but not host graphics drivers —
+      # you cannot bundle a GPU driver — so it loads libGL/glvnd from the host
+      # exactly as it would on a real desktop. Minimal CI runners have none.
+      - name: Install graphics runtime libraries
+        if: startsWith(matrix.platform, 'linux')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libopengl0 libglx0 libgl1 libegl1 libglu1-mesa libvulkan1
+
+      - name: Decide which specs can run here
+        id: select
+        run: |
+          python3 scripts/select-specs.py release-set.lock.json \
+            --platform "${{ matrix.platform }}" --format github >> "$GITHUB_OUTPUT"
+          python3 scripts/select-specs.py release-set.lock.json \
+            --platform "${{ matrix.platform }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Run the doc-tests
+        id: run
+        if: steps.select.outputs.any == 'true'
+        env:
+          RELEASE_SET_DIR: ${{ github.workspace }}
+          RELEASE_SET_LOCK: ${{ github.workspace }}/release-set.lock.json
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "${{ runner.temp }}/reports"
+          specs="${{ inputs.specs }}"
+          if [ -n "$specs" ]; then
+            selected=""
+            for name in $specs; do selected="$selected doctests/${name%.test.yaml}.test.yaml"; done
+          else
+            selected="${{ steps.select.outputs.specs }}"
+          fi
+          echo "Running:$selected"
+          nix run github:logos-co/logos-doctest -- run \
+            $selected \
+            --verbose \
+            --continue-on-fail \
+            --report "${{ runner.temp }}/reports/index.html"
+
+      - name: Record the results
+        if: always()
+        env:
+          OUTCOME: ${{ steps.run.outcome }}
+          SKIPPED: ${{ steps.select.outputs.skipped }}
+          SPECS: ${{ steps.select.outputs.specs }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          platform = "${{ matrix.platform }}"
+          runner   = "${{ matrix.runner }}"
+          base     = ("https://${{ github.repository_owner }}.github.io/"
+                      "${{ github.event.repository.name }}/"
+                      "${{ github.run_id }}/" + platform + "/")
+
+          # The runner produces one combined report per platform; every spec that
+          # ran on this platform links to it.
+          status = {"success": "passed", "failure": "failed",
+                    "skipped": "skipped", "": "skipped"}.get(os.environ["OUTCOME"], "failed")
+
+          results = []
+          for spec in os.environ["SPECS"].split():
+              name = spec.split("/")[-1].removesuffix(".test.yaml")
+              results.append({"spec": name, "platform": platform, "runner": runner,
+                              "status": status, "reportUrl": base})
+          results.extend(json.loads(os.environ["SKIPPED"] or "[]"))
+          for entry in results:
+              entry.setdefault("runner", runner)
+
+          with open(f"results-{platform}.json", "w") as handle:
+              json.dump(results, handle, indent=2)
+          print(json.dumps(results, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.platform }}
+          path: results-${{ matrix.platform }}.json
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports-${{ matrix.platform }}
+          path: ${{ runner.temp }}/reports/
+          if-no-files-found: warn
+
+  publish:
+    name: Publish the release set
+    needs: [resolve, doctests]
+    # Only a fully green run publishes. Placeholders on main never get this far
+    # — the resolve job fails first.
+    if: ${{ success() && !inputs.dry_run && github.ref_name != 'main' && github.ref_name != 'master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish the doc-test reports
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./artifacts
+          destination_dir: ${{ github.run_id }}
+          keep_files: true
+          commit_message: "Release-set reports for ${{ needs.resolve.outputs.version }} (${{ github.sha }})"
+
+      - name: Merge results and render the release notes
+        run: |
+          python3 scripts/render-release.py \
+            artifacts/release-set-lock/release-set.lock.json \
+            artifacts/results-*/results-*.json \
+            --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --out-lock release-set.lock.json \
+            --out-notes RELEASE.md
+          cat RELEASE.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          reports=""
+          for dir in artifacts/reports-*; do
+            [ -f "$dir/index.html" ] || continue
+            platform="${dir#artifacts/reports-}"
+            cp "$dir/index.html" "report-$platform.html"
+            reports="$reports report-$platform.html"
+          done
+          # shellcheck disable=SC2086
+          gh release create "v$VERSION" \
+            --title "Logos Release Set $VERSION" \
+            --notes-file RELEASE.md \
+            --target "${{ github.sha }}" \
+            release-set.lock.json $reports

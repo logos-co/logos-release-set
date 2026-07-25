@@ -1,0 +1,399 @@
+name: "Validating the pinned delivery_module"
+output: headless-delivery-module.md
+release: ""
+
+intro: |
+  This doc-test validates the `delivery_module` pinned by
+  [`release-set.json`](../release-set.json), using only released artifacts:
+  `logoscore`, `lgpd` and `lgpm` downloaded from their GitHub releases at the
+  pinned tags, and `delivery_module` pulled from the module catalog at the
+  pinned version and checksum-verified before install.
+
+  Initialization follows the
+  [Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide),
+  adjusted for a CI host with no public IP.
+
+  A **probe module** — built with the `logos-module-builder` release this set
+  pins — is loaded before the node starts, so it can subscribe to
+  `delivery_module`'s `nodeStarted` event and catch it as the node comes up.
+  That makes the event assertion deterministic: it does not depend on the node
+  finding peers.
+
+what_you_build: "The pinned `delivery_module`, installed from the catalog, started headlessly, and observed through a purpose-built probe module."
+
+what_you_learn:
+  - How a release set pins tools by release tag and modules by catalog version
+  - How to install an exact module version with `lgpd download --version` + `lgpm`
+  - How to create and start a delivery node headlessly, following the node operator guide
+  - How to subscribe to a dependency's typed events from another module
+  - Why a probe subscribes before the lifecycle call that fires the event
+
+prerequisites:
+  - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
+  - "**Nix** with flakes enabled — used only to build the probe module; the tools and modules under test come from released binaries."
+  - "**`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API)."
+
+sections:
+  - title: "Resolve the release set"
+    step: true
+    text: |
+      The resolver turns the pinned tags and versions in `release-set.json` into
+      `release-set.lock.json` — repository URL, commit, download URL and checksum
+      for every artifact. Every later step reads the lock.
+    steps:
+      - title: "Resolve"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" lock'
+        code_block: "./doctests/release-set.sh lock"
+        check_file: "release-set.lock.json"
+
+  - title: "Fetch the pinned tools"
+    step: true
+    text: |
+      Downloaded at the tags the release set pins. Linux artifacts are AppImages,
+      which we extract rather than mount — CI runners have no FUSE.
+    steps:
+      - title: "Fetch logoscore, lgpd and lgpm"
+        run: |
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logoscore
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-downloader lgpd
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
+        code_block: |
+          ./doctests/release-set.sh fetch logos-logoscore-cli logoscore
+          ./doctests/release-set.sh fetch logos-package-downloader lgpd
+          ./doctests/release-set.sh fetch logos-package-manager lgpm
+        check_file: "bin/logoscore"
+
+  - title: "Install the pinned delivery_module"
+    step: true
+    text: |
+      `lgpd download --version` matches the version exactly — no semver ranges —
+      so the release set gets precisely what it pinned. The helper verifies the
+      `.lgx` against the catalog's published `sha256` before installing it.
+    steps:
+      - title: "Download, verify and install"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" install delivery_module'
+        code_block: |
+          lgpd download delivery_module --version <pinned> -o packages
+          lgpm --modules-dir ./modules install --file packages/delivery_module-*.lgx
+        expect_contains:
+          - "sha256 OK"
+          - "Installed to:"
+
+  - title: "Build a probe module with the pinned module-builder"
+    step: true
+    text: |
+      The probe is built **before** the node starts, because it needs to be
+      subscribed when `nodeStarted` fires. It declares `delivery_module` as a
+      dependency and supplies the contract itself via `dependency_overrides`, so
+      it compiles against the interface without building `delivery_module` from
+      source — what it talks to at runtime is the downloaded `.lgx`.
+    steps:
+      - title: "Write the dependency contract"
+        run: |
+          mkdir -p probe/src probe/deps
+          VER="$("$RELEASE_SET_DIR/doctests/release-set.sh" pin modules delivery_module)"
+          cat > probe/deps/delivery_module.lidl <<EOF
+          ; The subset of delivery_module this probe uses, supplied as a
+          ; dependency_override so the probe never builds delivery_module itself.
+          module delivery_module {
+            version "$VER"
+
+            method getNodeInfo(nodeInfoId: tstr) -> result
+
+            event nodeStarted(success: bool, message: tstr, timestamp: int)
+          }
+          EOF
+          cat probe/deps/delivery_module.lidl
+        code_block: |
+          module delivery_module {
+            version "<pinned>"
+
+            method getNodeInfo(nodeInfoId: tstr) -> result
+
+            event nodeStarted(success: bool, message: tstr, timestamp: int)
+          }
+        check_file: "probe/deps/delivery_module.lidl"
+
+      - title: "Declare the module"
+        file:
+          path: probe/metadata.json
+          language: json
+          content: |
+            {
+              "name": "probe_delivery",
+              "display_name": "Delivery Probe",
+              "version": "1.0.0",
+              "type": "core",
+              "interface": "universal",
+              "category": "test",
+              "description": "Calls delivery_module and latches its nodeStarted event.",
+              "main": "probe_delivery_plugin",
+              "dependencies": ["delivery_module"],
+              "dependency_overrides": {
+                "delivery_module": { "file": "deps/delivery_module.lidl" }
+              },
+              "nix": {
+                "packages": { "build": [], "runtime": [] },
+                "external_libraries": [],
+                "cmake": {
+                  "find_packages": [],
+                  "extra_sources": [],
+                  "extra_include_dirs": [],
+                  "extra_link_libraries": []
+                }
+              }
+            }
+
+      - title: "Pin the builder to the release set"
+        run: |
+          TAG="$("$RELEASE_SET_DIR/doctests/release-set.sh" pin devUtils logos-module-builder)"
+          cat > probe/flake.nix <<EOF
+          {
+            description = "delivery_module probe";
+            inputs = {
+              logos-module-builder.url = "github:logos-co/logos-module-builder/$TAG";
+            };
+            outputs = inputs@{ logos-module-builder, ... }:
+              logos-module-builder.lib.mkLogosModule {
+                src = ./.;
+                configFile = ./metadata.json;
+                flakeInputs = inputs;
+              };
+          }
+          EOF
+          cat probe/flake.nix
+        code_block: |
+          inputs = {
+            logos-module-builder.url = "github:logos-co/logos-module-builder/<pinned tag>";
+          };
+        check_file: "probe/flake.nix"
+
+      - title: "Write the build file"
+        file:
+          path: probe/CMakeLists.txt
+          language: cmake
+          content: |
+            cmake_minimum_required(VERSION 3.14)
+            project(ProbeDeliveryPlugin LANGUAGES CXX)
+
+            if(DEFINED ENV{LOGOS_MODULE_BUILDER_ROOT})
+                include($ENV{LOGOS_MODULE_BUILDER_ROOT}/cmake/LogosModule.cmake)
+            else()
+                message(FATAL_ERROR "LogosModule.cmake not found")
+            endif()
+
+            file(READ "${CMAKE_CURRENT_SOURCE_DIR}/metadata.json" METADATA_JSON)
+            string(JSON MODULE_NAME GET ${METADATA_JSON} name)
+
+            logos_module(
+                NAME ${MODULE_NAME}
+                SOURCES
+                    src/probe_delivery_impl.h
+                    src/probe_delivery_impl.cpp
+            )
+
+      - title: "Write the probe"
+        file:
+          path: probe/src/probe_delivery_impl.h
+          language: cpp
+          content: |
+            #pragma once
+
+            #include <string>
+            #include "logos_module_context.h"
+
+            /// Probes the delivery_module pinned by the release set. Subscribes
+            /// to nodeStarted before the node comes up, so the event assertion
+            /// does not depend on the node finding peers.
+            class ProbeDeliveryImpl : public LogosModuleContext
+            {
+            public:
+                /// Subscribes to delivery_module's nodeStarted event.
+                std::string subscribe();
+
+                /// Description of the last nodeStarted event, or "" if none yet.
+                std::string lastNodeStarted();
+
+                /// Round-trips a call into delivery_module and returns what it said.
+                std::string nodeInfo(const std::string& what);
+
+            private:
+                std::string m_lastNodeStarted;
+            };
+
+      - title: "Write the implementation"
+        file:
+          path: probe/src/probe_delivery_impl.cpp
+          language: cpp
+          content: |
+            #include "probe_delivery_impl.h"
+
+            // modules() needs the generated aggregate to be a complete type, so
+            // the cross-module calls live here rather than in the header.
+            #include "logos_sdk.h"
+
+            std::string ProbeDeliveryImpl::subscribe()
+            {
+                const bool ok = modules().delivery_module.onNodeStarted(
+                    [this](bool success, const std::string& message, int64_t timestamp) {
+                        m_lastNodeStarted = std::string("success=") +
+                            (success ? "true" : "false") +
+                            " message=" + message +
+                            " timestamp=" + std::to_string(timestamp);
+                    });
+                return ok ? "ok" : "failed";
+            }
+
+            std::string ProbeDeliveryImpl::lastNodeStarted()
+            {
+                return m_lastNodeStarted;
+            }
+
+            std::string ProbeDeliveryImpl::nodeInfo(const std::string& what)
+            {
+                auto result = modules().delivery_module.getNodeInfo(what);
+                return result.success ? result.value.dump() : ("error: " + result.error);
+            }
+
+      - title: "Build it as a portable package"
+        text: |
+          `#lgx-portable`, not `#lgx`. The host is a released (portable) AppImage
+          and the delivery module came from the catalog as a portable variant; a
+          dev build would RPATH into `/nix/store` and refuse to load beside them.
+          Nix only sees files git knows about, so the probe is committed first.
+        run: |
+          cd probe
+          git init -q . && git add -A
+          nix build '.#lgx-portable' --no-write-lock-file -o probe-lgx
+          ls probe-lgx/*.lgx
+        code_block: |
+          git init && git add -A
+          nix build '.#lgx-portable' -o probe-lgx
+        check_file: "probe/probe-lgx"
+
+      - title: "Install the probe"
+        run: "./bin/lgpm --modules-dir ./modules --allow-unsigned install --file probe/probe-lgx/*.lgx"
+        code_block: "lgpm --modules-dir ./modules --allow-unsigned install --file probe/probe-lgx/*.lgx"
+        expect_contains:
+          - "Installed to:"
+
+  - title: "Start the runtime and subscribe"
+    step: true
+    text: |
+      Load both modules, then register the probe's subscription — before any
+      lifecycle call, so nothing is missed.
+    steps:
+      - title: "Start the daemon"
+        run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
+        code_block: "logoscore -D -m ./modules > logs.txt &"
+      - run: "sleep 3"
+      - title: "Load delivery_module"
+        run: "./bin/logoscore load-module delivery_module"
+        code_block: "logoscore load-module delivery_module"
+        expect_contains:
+          - "delivery_module"
+      - title: "Load the probe"
+        run: "./bin/logoscore load-module probe_delivery"
+        code_block: "logoscore load-module probe_delivery"
+        expect_contains:
+          - "probe_delivery"
+      - title: "Subscribe"
+        run: "./bin/logoscore call probe_delivery subscribe"
+        code_block: "logoscore call probe_delivery subscribe"
+        expect_contains:
+          - "ok"
+
+  - title: "Initialize the node"
+    step: true
+    text: |
+      The node operator guide's delivery step. One deliberate change: the guide
+      sets `"nat": "extip:<public-ip>"`, which a CI runner cannot satisfy, so we
+      use `"nat": "none"`.
+
+      Extended Kademlia discovery is intentionally left out. `start` performs a
+      **blocking** DHT bootstrap that only returns once the DHT is joined; in a
+      headless CI run that never completes and the call times out.
+    steps:
+      - title: "Write the node config"
+        run: |
+          cat > delivery-config.json <<'EOF'
+          {
+            "preset": "logos.test",
+            "mode": "Core",
+            "logLevel": "INFO",
+            "tcpPort": 30303,
+            "discv5UdpPort": 9000,
+            "discv5Discovery": true,
+            "nat": "none"
+          }
+          EOF
+          cat delivery-config.json
+        code_block: |
+          {
+            "preset": "logos.test",
+            "mode": "Core",
+            "logLevel": "INFO",
+            "tcpPort": 30303,
+            "discv5UdpPort": 9000,
+            "discv5Discovery": true,
+            "nat": "none"
+          }
+        check_file: "delivery-config.json"
+      - title: "createNode"
+        run: "./bin/logoscore call delivery_module createNode @delivery-config.json"
+        code_block: "logoscore call delivery_module createNode @delivery-config.json"
+        expect_contains:
+          - "true"
+      - title: "start"
+        run: "./bin/logoscore call delivery_module start"
+        code_block: "logoscore call delivery_module start"
+        expect_contains:
+          - "true"
+      - title: "Verify the node is up"
+        run: |
+          ./bin/logoscore call delivery_module getNodeInfo Version
+          ./bin/logoscore call delivery_module getNodeInfo MyBoundPorts
+        code_block: |
+          logoscore call delivery_module getNodeInfo Version
+          logoscore call delivery_module getNodeInfo MyBoundPorts
+        expect_contains:
+          - '"result"'
+
+  - title: "Read the results back through the probe"
+    step: true
+    text: |
+      Both halves of the contract, observed from inside the runtime: a call the
+      probe made into `delivery_module`, and an event `delivery_module` pushed
+      to the probe.
+    steps:
+      - title: "The probe's own call"
+        run: "./bin/logoscore call probe_delivery nodeInfo Version"
+        code_block: "logoscore call probe_delivery nodeInfo Version"
+        expect_contains:
+          - "Result:"
+      - run: "sleep 3"
+      - title: "The event the probe caught"
+        run: "./bin/logoscore call probe_delivery lastNodeStarted"
+        code_block: "logoscore call probe_delivery lastNodeStarted"
+        expect_contains:
+          - "success="
+        post_text: |
+          That event was emitted by the pinned `delivery_module` as its node
+          finished starting, delivered over the runtime's event channel, and
+          captured by a module built with the pinned `logos-module-builder`.
+
+  - title: "Shut down"
+    step: true
+    text: "Stop the daemon and confirm it exited cleanly."
+    steps:
+      - title: "Stop"
+        run: |
+          trap '' TERM
+          ./bin/logoscore stop || true
+          true
+      - run: "sleep 2"
+      - title: "Confirm"
+        run: "./bin/logoscore status || true"
+        code_block: "logoscore status"
+        expect_contains:
+          - '"status":"not_running"'

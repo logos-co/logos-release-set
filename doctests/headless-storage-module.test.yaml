@@ -1,0 +1,465 @@
+name: "Validating the pinned storage_module"
+output: headless-storage-module.md
+release: ""
+
+intro: |
+  This doc-test validates the `storage_module` pinned by
+  [`release-set.json`](../release-set.json) — not the latest `master`, not a
+  local build: **exactly the artifacts a user would install**.
+
+  Everything runs from released binaries. `logoscore`, `lgpd` and `lgpm` are
+  downloaded from their GitHub releases at the tags the release set pins;
+  `storage_module` is pulled from the module catalog with `lgpd` at the pinned
+  version and installed with `lgpm`, checksum-verified against the catalog
+  index. The initialization follows the
+  [Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide),
+  adjusted for a CI host with no public IP.
+
+  Then it goes one step further than "the module loads": it builds a small
+  **probe module** with the `logos-module-builder` release the set pins, and
+  uses that probe to call `storage_module` and subscribe to one of its events
+  from inside the runtime. A green run means the pinned storage module is
+  installable, loadable, callable, and actually emits the events other modules
+  depend on.
+
+what_you_build: "The pinned `storage_module`, installed from the catalog and driven through a `logoscore` daemon and a purpose-built probe module."
+
+what_you_learn:
+  - How a release set pins tools by release tag and modules by catalog version
+  - How to install an exact module version with `lgpd download --version` + `lgpm`
+  - How to initialize the storage node headlessly, following the node operator guide
+  - How to observe a module's events with `logoscore watch`
+  - How to build a probe module that calls a dependency and subscribes to its events
+
+prerequisites:
+  - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
+  - "**Nix** with flakes enabled — used only to build the probe module; the tools and modules under test come from released binaries."
+  - "**`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API)."
+
+sections:
+  - title: "Resolve the release set"
+    step: true
+    text: |
+      `release-set.json` carries the minimum a human types — a tag per app, a
+      version per catalog package. The resolver turns that into
+      `release-set.lock.json`: repository URL, commit hash, download URL and
+      checksum for every artifact. Every later step reads the lock, so the whole
+      doc-test is pinned to one immutable set.
+    steps:
+      - title: "Resolve"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" lock'
+        code_block: "./doctests/release-set.sh lock"
+        check_file: "release-set.lock.json"
+        post_text: |
+          Each line is a pinned artifact and the commit it was built from. For
+          catalog packages that commit is the submodule gitlink in
+          `logos-modules-release` at the package's release tag — the exact source
+          the `.lgx` was built from.
+
+  - title: "Fetch the pinned tools"
+    step: true
+    text: |
+      `logoscore` (the headless module runtime), `lgpd` (catalog downloader) and
+      `lgpm` (package installer) are downloaded at the tags the release set pins.
+      On Linux they ship as AppImages, which we extract rather than mount — CI
+      runners have no FUSE. On macOS they ship as directory bundles.
+    steps:
+      - title: "Fetch logoscore"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logoscore'
+        code_block: "./doctests/release-set.sh fetch logos-logoscore-cli logoscore"
+        check_file: "bin/logoscore"
+      - title: "Fetch lgpd and lgpm"
+        run: |
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-downloader lgpd
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
+        code_block: |
+          ./doctests/release-set.sh fetch logos-package-downloader lgpd
+          ./doctests/release-set.sh fetch logos-package-manager lgpm
+        check_file: "bin/lgpm"
+      - title: "Confirm the versions"
+        run: "./bin/logoscore --version && ./bin/lgpm --help | head -3"
+        code_block: "logoscore --version"
+
+  - title: "Install the pinned storage_module"
+    step: true
+    text: |
+      `lgpd download --version` pulls that exact version from the catalog — the
+      match is an exact string comparison, not a semver range, so the release set
+      gets precisely what it asked for. The helper then verifies the downloaded
+      `.lgx` against the `sha256` the catalog index publishes before handing it
+      to `lgpm`.
+
+      `storage_module` is a `core` module, so `lgpm` routes it to `--modules-dir`.
+    steps:
+      - title: "Download, verify and install"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" install storage_module'
+        code_block: |
+          lgpd download storage_module --version <pinned> -o packages
+          lgpm --modules-dir ./modules install --file packages/storage_module-*.lgx
+        expect_contains:
+          - "sha256 OK"
+          - "Installed to:"
+      - title: "Confirm what landed"
+        run: "./bin/lgpm --modules-dir ./modules list"
+        code_block: "lgpm --modules-dir ./modules list"
+        expect_contains:
+          - "storage_module"
+
+  - title: "Start the runtime and load the module"
+    step: true
+    text: |
+      `logoscore -D` starts the daemon in the background; the client subcommands
+      then talk to it over the control socket configured under `~/.logoscore/`.
+    steps:
+      - title: "Start the daemon"
+        run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
+        code_block: "logoscore -D -m ./modules > logs.txt &"
+      - run: "sleep 3"
+      - title: "List what the daemon discovered"
+        run: "./bin/logoscore list-modules"
+        code_block: "logoscore list-modules"
+        expect_contains:
+          - "storage_module"
+      - title: "Load it"
+        run: "./bin/logoscore load-module storage_module"
+        code_block: "logoscore load-module storage_module"
+        expect_contains:
+          - "storage_module"
+      - title: "Confirm it is loaded"
+        run: "./bin/logoscore status"
+        code_block: "logoscore status"
+        expect_contains:
+          - "storage_module"
+          - '"status":"loaded"'
+
+  - title: "Initialize the node"
+    step: true
+    text: |
+      This is the node operator guide's storage step, with one deliberate change:
+      the guide sets `"nat": "extip:<public-ip>"` and binds discovery ports,
+      which a CI runner (no public IP, no inbound ports) cannot satisfy. We use
+      `"nat": "none"` instead. Everything else — `init` with a config file, then
+      `start` — is the documented sequence.
+
+      `init` is synchronous; `start` completes asynchronously and announces
+      itself with a `storageStart` event, so we begin watching before calling it.
+    steps:
+      - title: "Write the node config"
+        run: |
+          mkdir -p storage-data
+          cat > config.json <<EOF
+          {
+            "data-dir": "$(pwd)/storage-data",
+            "log-level": "INFO",
+            "log-file": "$(pwd)/storage-data/storage.log",
+            "nat": "none"
+          }
+          EOF
+          cat config.json
+        code_block: |
+          {
+            "data-dir": "./storage-data",
+            "log-level": "INFO",
+            "log-file": "./storage-data/storage.log",
+            "nat": "none"
+          }
+        check_file: "config.json"
+      - title: "Watch for the start event"
+        run: "sh -c './bin/logoscore watch storage_module --event storageStart --json > start-event.txt 2>&1 & echo $! > watch.pid'"
+        code_block: "logoscore watch storage_module --event storageStart --json"
+      - run: "sleep 2"
+      - title: "init"
+        run: "./bin/logoscore call storage_module init @config.json"
+        code_block: "logoscore call storage_module init @config.json"
+        expect_contains:
+          - "true"
+      - title: "start"
+        run: "./bin/logoscore call storage_module start"
+        code_block: "logoscore call storage_module start"
+        expect_contains:
+          - "true"
+      - title: "Confirm the start event arrived"
+        run: |
+          sleep 5
+          kill "$(cat watch.pid)" 2>/dev/null || true
+          cat start-event.txt
+        code_block: "cat start-event.txt"
+        expect_contains:
+          - "storageStart"
+        post_text: |
+          The node is up and announcing it. Everything from here on is a real
+          round-trip into the pinned `.lgx`.
+
+  - title: "Build a probe module with the pinned module-builder"
+    step: true
+    text: |
+      Calling a module from the CLI proves it answers. It does not prove that
+      *another module* can consume it — the path every real application uses.
+      So we build one, with the `logos-module-builder` release this set pins.
+
+      The probe declares `storage_module` as a dependency and supplies the
+      contract itself via `dependency_overrides`. That matters: a contract file
+      means the probe compiles against the *interface* without building
+      `storage_module` from source, so what it talks to at runtime is the
+      downloaded `.lgx` and nothing else. (This is the same mechanism
+      `logos-chat-module` uses for its `delivery_module` dependency.)
+    steps:
+      - title: "Write the dependency contract"
+        text: |
+          Only the subset the probe uses, pinned to the version in the release
+          set. `logos-lidl` turns this into a typed client for the probe.
+        run: |
+          mkdir -p probe/src probe/deps
+          VER="$("$RELEASE_SET_DIR/doctests/release-set.sh" pin modules storage_module)"
+          cat > probe/deps/storage_module.lidl <<EOF
+          ; The subset of storage_module this probe uses, supplied as a
+          ; dependency_override so the probe never builds storage_module itself.
+          module storage_module {
+            version "$VER"
+
+            method moduleVersion() -> tstr
+            method uploadUrl(filePath: tstr, chunkSize: int) -> result
+
+            event storageUploadDone(payload: tstr)
+          }
+          EOF
+          cat probe/deps/storage_module.lidl
+        code_block: |
+          module storage_module {
+            version "<pinned>"
+
+            method moduleVersion() -> tstr
+            method uploadUrl(filePath: tstr, chunkSize: int) -> result
+
+            event storageUploadDone(payload: tstr)
+          }
+        check_file: "probe/deps/storage_module.lidl"
+
+      - title: "Declare the module"
+        file:
+          path: probe/metadata.json
+          language: json
+          content: |
+            {
+              "name": "probe_storage",
+              "display_name": "Storage Probe",
+              "version": "1.0.0",
+              "type": "core",
+              "interface": "universal",
+              "category": "test",
+              "description": "Calls storage_module and latches one of its events.",
+              "main": "probe_storage_plugin",
+              "dependencies": ["storage_module"],
+              "dependency_overrides": {
+                "storage_module": { "file": "deps/storage_module.lidl" }
+              },
+              "nix": {
+                "packages": { "build": [], "runtime": [] },
+                "external_libraries": [],
+                "cmake": {
+                  "find_packages": [],
+                  "extra_sources": [],
+                  "extra_include_dirs": [],
+                  "extra_link_libraries": []
+                }
+              }
+            }
+
+      - title: "Pin the builder to the release set"
+        text: |
+          The one input that matters: `logos-module-builder` at the tag the
+          release set pins. That is what "built with the dev utils this release
+          set ships" means concretely.
+        run: |
+          TAG="$("$RELEASE_SET_DIR/doctests/release-set.sh" pin devUtils logos-module-builder)"
+          cat > probe/flake.nix <<EOF
+          {
+            description = "storage_module probe";
+            inputs = {
+              logos-module-builder.url = "github:logos-co/logos-module-builder/$TAG";
+            };
+            outputs = inputs@{ logos-module-builder, ... }:
+              logos-module-builder.lib.mkLogosModule {
+                src = ./.;
+                configFile = ./metadata.json;
+                flakeInputs = inputs;
+              };
+          }
+          EOF
+          cat probe/flake.nix
+        code_block: |
+          inputs = {
+            logos-module-builder.url = "github:logos-co/logos-module-builder/<pinned tag>";
+          };
+        check_file: "probe/flake.nix"
+
+      - title: "Write the build file"
+        file:
+          path: probe/CMakeLists.txt
+          language: cmake
+          content: |
+            cmake_minimum_required(VERSION 3.14)
+            project(ProbeStoragePlugin LANGUAGES CXX)
+
+            if(DEFINED ENV{LOGOS_MODULE_BUILDER_ROOT})
+                include($ENV{LOGOS_MODULE_BUILDER_ROOT}/cmake/LogosModule.cmake)
+            else()
+                message(FATAL_ERROR "LogosModule.cmake not found")
+            endif()
+
+            file(READ "${CMAKE_CURRENT_SOURCE_DIR}/metadata.json" METADATA_JSON)
+            string(JSON MODULE_NAME GET ${METADATA_JSON} name)
+
+            logos_module(
+                NAME ${MODULE_NAME}
+                SOURCES
+                    src/probe_storage_impl.h
+                    src/probe_storage_impl.cpp
+            )
+
+      - title: "Write the probe"
+        text: |
+          A universal module: you write the implementation class, and the Qt
+          plugin glue is generated from this header. Module code stays Qt-free —
+          `std::string`, not `QString`.
+        file:
+          path: probe/src/probe_storage_impl.h
+          language: cpp
+          content: |
+            #pragma once
+
+            #include <string>
+            #include "logos_module_context.h"
+
+            /// Probes the storage_module pinned by the release set: one call in,
+            /// one event out. Deriving LogosModuleContext gives us modules() —
+            /// typed callers and typed event subscriptions for everything in
+            /// metadata.json#dependencies.
+            class ProbeStorageImpl : public LogosModuleContext
+            {
+            public:
+                /// Subscribes to storage_module's storageUploadDone event.
+                /// Returns "ok" once the subscription is registered.
+                std::string subscribe();
+
+                /// The payload of the last storageUploadDone we received.
+                /// Empty until one arrives.
+                std::string lastUploadEvent();
+
+                /// Round-trips a call into storage_module and returns what it said.
+                std::string targetVersion();
+
+            private:
+                std::string m_lastUpload;
+            };
+
+      - title: "Write the implementation"
+        file:
+          path: probe/src/probe_storage_impl.cpp
+          language: cpp
+          content: |
+            #include "probe_storage_impl.h"
+
+            // modules() needs the generated aggregate to be a complete type, so
+            // the cross-module calls live here rather than in the header.
+            #include "logos_sdk.h"
+
+            std::string ProbeStorageImpl::subscribe()
+            {
+                const bool ok = modules().storage_module.onStorageUploadDone(
+                    [this](const std::string& payload) { m_lastUpload = payload; });
+                return ok ? "ok" : "failed";
+            }
+
+            std::string ProbeStorageImpl::lastUploadEvent()
+            {
+                return m_lastUpload;
+            }
+
+            std::string ProbeStorageImpl::targetVersion()
+            {
+                return modules().storage_module.moduleVersion();
+            }
+
+      - title: "Build it as a portable package"
+        text: |
+          `#lgx-portable`, not `#lgx`. The host is a released (portable) AppImage
+          and the storage module came from the catalog as a portable variant; a
+          dev build would RPATH into `/nix/store` and refuse to load beside them.
+          Nix only sees files git knows about, so the probe is committed first.
+        run: |
+          cd probe
+          git init -q . && git add -A
+          nix build '.#lgx-portable' --no-write-lock-file -o probe-lgx
+          ls probe-lgx/*.lgx
+        code_block: |
+          git init && git add -A
+          nix build '.#lgx-portable' -o probe-lgx
+        check_file: "probe/probe-lgx"
+
+      - title: "Install the probe"
+        run: "./bin/lgpm --modules-dir ./modules --allow-unsigned install --file probe/probe-lgx/*.lgx"
+        code_block: "lgpm --modules-dir ./modules --allow-unsigned install --file probe/probe-lgx/*.lgx"
+        expect_contains:
+          - "Installed to:"
+
+  - title: "Drive storage_module through the probe"
+    step: true
+    text: |
+      The daemon is already running with the storage node started, so loading the
+      probe wires it to the live module. Everything below crosses a real
+      inter-module boundary.
+    steps:
+      - title: "Load the probe"
+        run: "./bin/logoscore load-module probe_storage"
+        code_block: "logoscore load-module probe_storage"
+        expect_contains:
+          - "probe_storage"
+      - title: "Call storage_module from the probe"
+        text: "A cross-module call: probe -> storage_module -> back."
+        run: "./bin/logoscore call probe_storage targetVersion"
+        code_block: "logoscore call probe_storage targetVersion"
+        expect_contains:
+          - "Result:"
+      - title: "Subscribe to the event"
+        run: "./bin/logoscore call probe_storage subscribe"
+        code_block: "logoscore call probe_storage subscribe"
+        expect_contains:
+          - "ok"
+      - title: "Trigger an upload"
+        text: |
+          Uploading a file makes `storage_module` emit `storageUploadDone`. The
+          probe is subscribed, so the payload lands in its state.
+        run: |
+          echo "hello from the release set" > hello.txt
+          ./bin/logoscore call storage_module uploadUrl "$(pwd)/hello.txt" 65536
+        code_block: 'logoscore call storage_module uploadUrl "$(pwd)/hello.txt" 65536'
+        expect_contains:
+          - '"result"'
+      - run: "sleep 5"
+      - title: "Read the event back out of the probe"
+        run: "./bin/logoscore call probe_storage lastUploadEvent"
+        code_block: "logoscore call probe_storage lastUploadEvent"
+        expect_contains:
+          - "cid"
+        post_text: |
+          That payload was produced by the pinned `storage_module`, delivered
+          across the runtime's event channel, and captured by a module built with
+          the pinned `logos-module-builder`. Calls and events both work in the set
+          as pinned.
+
+  - title: "Shut down"
+    step: true
+    text: "Stop the daemon and confirm it exited cleanly."
+    steps:
+      - title: "Stop"
+        run: |
+          trap '' TERM
+          ./bin/logoscore stop || true
+          true
+      - run: "sleep 2"
+      - title: "Confirm"
+        run: "./bin/logoscore status || true"
+        code_block: "logoscore status"
+        expect_contains:
+          - '"status":"not_running"'

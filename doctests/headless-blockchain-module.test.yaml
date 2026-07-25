@@ -1,0 +1,399 @@
+name: "Validating the pinned blockchain_module"
+output: headless-blockchain-module.md
+release: ""
+
+intro: |
+  This doc-test validates the `blockchain_module` pinned by
+  [`release-set.json`](../release-set.json), using only released artifacts:
+  `logoscore`, `lgpd` and `lgpm` downloaded from their GitHub releases at the
+  pinned tags, and `blockchain_module` pulled from the module catalog at the
+  pinned version and checksum-verified before install.
+
+  Initialization follows the
+  [Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide) —
+  the real testnet peer set, `generate_user_config`, then `start` — stopping
+  short of the parts a CI runner cannot do (faucet funding and blend-network
+  participation both need a public IP and on-chain funds).
+
+  A **probe module** built with the pinned `logos-module-builder` then calls the
+  module and subscribes to its `newBlock` event.
+
+  > **On `newBlock`:** it only fires once the node has synced blocks from
+  > testnet peers, which depends on network conditions a CI run does not
+  > control. The subscription *registering* is asserted; the event *arriving* is
+  > reported but not asserted, so a slow sync reports honestly instead of
+  > failing red. The deterministic assertion is the `get_cryptarchia_info` call.
+
+what_you_build: "The pinned `blockchain_module`, installed from the catalog, joined to the testnet headlessly, and driven through a purpose-built probe module."
+
+what_you_learn:
+  - How a release set pins tools by release tag and modules by catalog version
+  - How to install an exact module version with `lgpd download --version` + `lgpm`
+  - How to generate a node config and start a blockchain node headlessly
+  - How to query chain state with `get_cryptarchia_info`
+  - How to subscribe to a dependency's events from another module
+
+prerequisites:
+  - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
+  - "**Nix** with flakes enabled — used only to build the probe module; the tools and modules under test come from released binaries."
+  - "**Outbound UDP** to the testnet peers. No inbound ports or public IP are required for this doc-test."
+  - "**`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API)."
+
+sections:
+  - title: "Resolve the release set"
+    step: true
+    text: |
+      The resolver turns the pinned tags and versions in `release-set.json` into
+      `release-set.lock.json` — repository URL, commit, download URL and checksum
+      for every artifact. Every later step reads the lock.
+    steps:
+      - title: "Resolve"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" lock'
+        code_block: "./doctests/release-set.sh lock"
+        check_file: "release-set.lock.json"
+
+  - title: "Fetch the pinned tools"
+    step: true
+    text: |
+      Downloaded at the tags the release set pins. Linux artifacts are AppImages,
+      which we extract rather than mount — CI runners have no FUSE.
+    steps:
+      - title: "Fetch logoscore, lgpd and lgpm"
+        run: |
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logoscore
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-downloader lgpd
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
+        code_block: |
+          ./doctests/release-set.sh fetch logos-logoscore-cli logoscore
+          ./doctests/release-set.sh fetch logos-package-downloader lgpd
+          ./doctests/release-set.sh fetch logos-package-manager lgpm
+        check_file: "bin/logoscore"
+
+  - title: "Install the pinned blockchain_module"
+    step: true
+    text: |
+      `lgpd download --version` matches the version exactly — no semver ranges.
+      The helper verifies the `.lgx` against the catalog's published `sha256`
+      before installing it.
+    steps:
+      - title: "Download, verify and install"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" install blockchain_module'
+        code_block: |
+          lgpd download blockchain_module --version <pinned> -o packages
+          lgpm --modules-dir ./modules install --file packages/blockchain_module-*.lgx
+        expect_contains:
+          - "sha256 OK"
+          - "Installed to:"
+      - title: "Confirm the installed version"
+        run: "./bin/lgpm --modules-dir ./modules info blockchain_module"
+        code_block: "lgpm --modules-dir ./modules info blockchain_module"
+        expect_contains:
+          - "blockchain_module"
+
+  - title: "Start the runtime and load the module"
+    step: true
+    steps:
+      - title: "Start the daemon"
+        run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
+        code_block: "logoscore -D -m ./modules > logs.txt &"
+      - run: "sleep 3"
+      - title: "Load blockchain_module"
+        run: "./bin/logoscore load-module blockchain_module"
+        code_block: "logoscore load-module blockchain_module"
+        expect_contains:
+          - "blockchain_module"
+      - title: "Confirm it is loaded"
+        run: "./bin/logoscore status"
+        code_block: "logoscore status"
+        expect_contains:
+          - "blockchain_module"
+          - '"status":"loaded"'
+
+  - title: "Initialize the node"
+    step: true
+    text: |
+      The node operator guide's blockchain step. `generate_user_config` takes the
+      testnet's initial peers and writes `user_config.yaml` into the **daemon's**
+      working directory; `start` then takes that path plus an empty second
+      argument (no deployment file is needed any more).
+    steps:
+      - title: "Write the testnet peer set"
+        text: "The initial peers from the node operator guide, verbatim."
+        file:
+          path: peers.json
+          language: json
+          content: |
+            {
+              "initial_peers": [
+                "/ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWFrouXfmrR4nsLMtE7wu15DoMJ6VtoUtHinREZCvbWHar",
+                "/ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWJRGau8M1rjT7R5e4YYsgdFhsMX35nRDtMwCDjxQkXAHz",
+                "/ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWQXJavMDTRscjauFSgVAB1VLB6Rzpy2uY5SU9Tk7927tb",
+                "/ip4/65.109.51.37/udp/50001/quic-v1/p2p/12D3KooWSQc7CcGtvWDPF1yCbBthFnQjprfCVHmfmNDUrSmqQsU1"
+              ]
+            }
+      - title: "Generate the node config"
+        run: './bin/logoscore call blockchain_module generate_user_config "$(cat peers.json)"'
+        code_block: 'logoscore call blockchain_module generate_user_config "$(cat peers.json)"'
+        check_file: "user_config.yaml"
+      - title: "Start the node"
+        run: './bin/logoscore call blockchain_module start "$(pwd)/user_config.yaml" ""'
+        code_block: 'logoscore call blockchain_module start /path/to/user_config.yaml ""'
+        expect_contains:
+          - '"result"'
+      - run: "sleep 20"
+      - title: "Query chain state"
+        text: |
+          Called once, not polled: repeatedly polling `get_cryptarchia_info` has
+          been observed to abort the host process, so a single read is both
+          enough and safer.
+        run: "./bin/logoscore call blockchain_module get_cryptarchia_info"
+        code_block: "logoscore call blockchain_module get_cryptarchia_info | jq -r .result.value | jq ."
+        expect_contains:
+          - '"result"'
+
+  - title: "Build a probe module with the pinned module-builder"
+    step: true
+    text: |
+      Calling a module from the CLI proves it answers. It does not prove that
+      *another module* can consume it — the path every real application uses. So
+      we build one, with the `logos-module-builder` release this set pins.
+
+      The probe declares `blockchain_module` as a dependency and supplies the
+      contract itself via `dependency_overrides`, so it compiles against the
+      interface without building `blockchain_module` from source — what it talks
+      to at runtime is the downloaded `.lgx`.
+    steps:
+      - title: "Write the dependency contract"
+        run: |
+          mkdir -p probe/src probe/deps
+          VER="$("$RELEASE_SET_DIR/doctests/release-set.sh" pin modules blockchain_module)"
+          cat > probe/deps/blockchain_module.lidl <<EOF
+          ; The subset of blockchain_module this probe uses, supplied as a
+          ; dependency_override so the probe never builds blockchain_module itself.
+          module blockchain_module {
+            version "$VER"
+
+            method get_cryptarchia_info() -> result
+
+            event newBlock(blockJson: tstr)
+          }
+          EOF
+          cat probe/deps/blockchain_module.lidl
+        code_block: |
+          module blockchain_module {
+            version "<pinned>"
+
+            method get_cryptarchia_info() -> result
+
+            event newBlock(blockJson: tstr)
+          }
+        check_file: "probe/deps/blockchain_module.lidl"
+
+      - title: "Declare the module"
+        file:
+          path: probe/metadata.json
+          language: json
+          content: |
+            {
+              "name": "probe_blockchain",
+              "display_name": "Blockchain Probe",
+              "version": "1.0.0",
+              "type": "core",
+              "interface": "universal",
+              "category": "test",
+              "description": "Calls blockchain_module and latches its newBlock event.",
+              "main": "probe_blockchain_plugin",
+              "dependencies": ["blockchain_module"],
+              "dependency_overrides": {
+                "blockchain_module": { "file": "deps/blockchain_module.lidl" }
+              },
+              "nix": {
+                "packages": { "build": [], "runtime": [] },
+                "external_libraries": [],
+                "cmake": {
+                  "find_packages": [],
+                  "extra_sources": [],
+                  "extra_include_dirs": [],
+                  "extra_link_libraries": []
+                }
+              }
+            }
+
+      - title: "Pin the builder to the release set"
+        run: |
+          TAG="$("$RELEASE_SET_DIR/doctests/release-set.sh" pin devUtils logos-module-builder)"
+          cat > probe/flake.nix <<EOF
+          {
+            description = "blockchain_module probe";
+            inputs = {
+              logos-module-builder.url = "github:logos-co/logos-module-builder/$TAG";
+            };
+            outputs = inputs@{ logos-module-builder, ... }:
+              logos-module-builder.lib.mkLogosModule {
+                src = ./.;
+                configFile = ./metadata.json;
+                flakeInputs = inputs;
+              };
+          }
+          EOF
+          cat probe/flake.nix
+        code_block: |
+          inputs = {
+            logos-module-builder.url = "github:logos-co/logos-module-builder/<pinned tag>";
+          };
+        check_file: "probe/flake.nix"
+
+      - title: "Write the build file"
+        file:
+          path: probe/CMakeLists.txt
+          language: cmake
+          content: |
+            cmake_minimum_required(VERSION 3.14)
+            project(ProbeBlockchainPlugin LANGUAGES CXX)
+
+            if(DEFINED ENV{LOGOS_MODULE_BUILDER_ROOT})
+                include($ENV{LOGOS_MODULE_BUILDER_ROOT}/cmake/LogosModule.cmake)
+            else()
+                message(FATAL_ERROR "LogosModule.cmake not found")
+            endif()
+
+            file(READ "${CMAKE_CURRENT_SOURCE_DIR}/metadata.json" METADATA_JSON)
+            string(JSON MODULE_NAME GET ${METADATA_JSON} name)
+
+            logos_module(
+                NAME ${MODULE_NAME}
+                SOURCES
+                    src/probe_blockchain_impl.h
+                    src/probe_blockchain_impl.cpp
+            )
+
+      - title: "Write the probe"
+        file:
+          path: probe/src/probe_blockchain_impl.h
+          language: cpp
+          content: |
+            #pragma once
+
+            #include <string>
+            #include "logos_module_context.h"
+
+            /// Probes the blockchain_module pinned by the release set: one call
+            /// in, one event subscription out.
+            class ProbeBlockchainImpl : public LogosModuleContext
+            {
+            public:
+                /// Subscribes to blockchain_module's newBlock event.
+                std::string subscribe();
+
+                /// How many newBlock events have arrived since subscribing.
+                int64_t blockCount();
+
+                /// Round-trips a call into blockchain_module and returns what it said.
+                std::string chainInfo();
+
+            private:
+                int64_t m_blocks = 0;
+            };
+
+      - title: "Write the implementation"
+        file:
+          path: probe/src/probe_blockchain_impl.cpp
+          language: cpp
+          content: |
+            #include "probe_blockchain_impl.h"
+
+            // modules() needs the generated aggregate to be a complete type, so
+            // the cross-module calls live here rather than in the header.
+            #include "logos_sdk.h"
+
+            std::string ProbeBlockchainImpl::subscribe()
+            {
+                const bool ok = modules().blockchain_module.onNewBlock(
+                    [this](const std::string& blockJson) {
+                        (void)blockJson;
+                        ++m_blocks;
+                    });
+                return ok ? "ok" : "failed";
+            }
+
+            int64_t ProbeBlockchainImpl::blockCount()
+            {
+                return m_blocks;
+            }
+
+            std::string ProbeBlockchainImpl::chainInfo()
+            {
+                auto result = modules().blockchain_module.get_cryptarchia_info();
+                return result.success ? result.value.dump() : ("error: " + result.error);
+            }
+
+      - title: "Build it as a portable package"
+        text: |
+          `#lgx-portable`, not `#lgx`. The host is a released (portable) AppImage
+          and the blockchain module came from the catalog as a portable variant; a
+          dev build would RPATH into `/nix/store` and refuse to load beside them.
+          Nix only sees files git knows about, so the probe is committed first.
+        run: |
+          cd probe
+          git init -q . && git add -A
+          nix build '.#lgx-portable' --no-write-lock-file -o probe-lgx
+          ls probe-lgx/*.lgx
+        code_block: |
+          git init && git add -A
+          nix build '.#lgx-portable' -o probe-lgx
+        check_file: "probe/probe-lgx"
+
+      - title: "Install the probe"
+        run: "./bin/lgpm --modules-dir ./modules --allow-unsigned install --file probe/probe-lgx/*.lgx"
+        code_block: "lgpm --modules-dir ./modules --allow-unsigned install --file probe/probe-lgx/*.lgx"
+        expect_contains:
+          - "Installed to:"
+
+  - title: "Drive blockchain_module through the probe"
+    step: true
+    text: |
+      The node is already running, so loading the probe wires it to the live
+      module. The call below crosses a real inter-module boundary.
+    steps:
+      - title: "Load the probe"
+        run: "./bin/logoscore load-module probe_blockchain"
+        code_block: "logoscore load-module probe_blockchain"
+        expect_contains:
+          - "probe_blockchain"
+      - title: "Call the module from the probe"
+        run: "./bin/logoscore call probe_blockchain chainInfo"
+        code_block: "logoscore call probe_blockchain chainInfo"
+        expect_contains:
+          - "Result:"
+      - title: "Subscribe to newBlock"
+        run: "./bin/logoscore call probe_blockchain subscribe"
+        code_block: "logoscore call probe_blockchain subscribe"
+        expect_contains:
+          - "ok"
+      - run: "sleep 30"
+      - title: "Report how many blocks arrived"
+        text: |
+          Not asserted: block arrival depends on how fast this node syncs from
+          testnet peers, which varies. A zero here means the subscription was
+          registered but no block landed inside the window — informative, not a
+          failure. A non-zero is positive proof the event path works end to end.
+        run: "./bin/logoscore call probe_blockchain blockCount"
+        code_block: "logoscore call probe_blockchain blockCount"
+
+  - title: "Shut down"
+    step: true
+    text: "Stop the node and the daemon, and confirm the daemon exited cleanly."
+    steps:
+      - title: "Stop"
+        run: |
+          trap '' TERM
+          ./bin/logoscore call blockchain_module stop || true
+          sleep 3
+          ./bin/logoscore stop || true
+          true
+      - run: "sleep 2"
+      - title: "Confirm"
+        run: "./bin/logoscore status || true"
+        code_block: "logoscore status"
+        expect_contains:
+          - '"status":"not_running"'

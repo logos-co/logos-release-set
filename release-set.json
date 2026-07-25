@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "version": "CHANGE-ME",
+  "name": "logos-release-set",
+  "displayName": "Logos Release Set",
+  "description": "The set of Logos app, dev-util and module releases published and supported together.",
+
+  "catalog": {
+    "repo": "logos-co/logos-modules-release",
+    "logosRepoUrl": "https://raw.githubusercontent.com/logos-co/logos-modules-release/refs/heads/main/logos-repo.json"
+  },
+
+  "apps": [
+    { "name": "logos-basecamp",           "repo": "logos-co/logos-basecamp",           "releaseTag": "CHANGE-ME" },
+    { "name": "logos-logoscore-cli",      "repo": "logos-co/logos-logoscore-cli",      "releaseTag": "CHANGE-ME" },
+    { "name": "logos-package-manager",    "repo": "logos-co/logos-package-manager",    "releaseTag": "CHANGE-ME" },
+    { "name": "logos-package-downloader", "repo": "logos-co/logos-package-downloader", "releaseTag": "CHANGE-ME" }
+  ],
+
+  "devUtils": [
+    { "name": "logos-module-builder",     "repo": "logos-co/logos-module-builder",     "releaseTag": "CHANGE-ME" }
+  ],
+
+  "modules": [
+    { "name": "blockchain_module",    "version": "CHANGE-ME" },
+    { "name": "delivery_module",      "version": "CHANGE-ME" },
+    { "name": "chat_module",          "version": "CHANGE-ME" },
+    { "name": "lez_indexer_module",   "version": "CHANGE-ME" },
+    { "name": "logos_execution_zone", "version": "CHANGE-ME" },
+    { "name": "storage_module",       "version": "CHANGE-ME" }
+  ],
+
+  "uiApps": [
+    { "name": "blockchain_ui",        "version": "CHANGE-ME" },
+    { "name": "chat_ui",              "version": "CHANGE-ME" },
+    { "name": "lez_explorer_ui",      "version": "CHANGE-ME" },
+    { "name": "lez_wallet_ui",        "version": "CHANGE-ME" },
+    { "name": "storage_ui",           "version": "CHANGE-ME" }
+  ]
+}

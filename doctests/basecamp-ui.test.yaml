@@ -1,0 +1,182 @@
+name: "Driving the Basecamp UI against the pinned release set"
+output: basecamp-ui.md
+release: ""
+
+intro: |
+  This doc-test drives Basecamp's real UI against every module and UI app the
+  release set pins: it populates a user directory from the catalog with `lgpd`
+  and `lgpm`, launches Basecamp headless, and walks the interface through the
+  QML inspector — waiting for elements, clicking into views, asserting on what
+  renders, and capturing screenshots.
+
+  **Why this builds Basecamp instead of downloading it.** The QML inspector is a
+  compile-time feature and is deliberately off in every shipping artifact, so
+  the released AppImage cannot be driven by a test harness. This spec therefore
+  builds `#bin-bundle-dir-inspector` — the inspector-enabled twin of the shipping
+  portable bundle — **at the exact commit the release set resolved for Basecamp**.
+  Same source, same portable packaging, inspector on.
+
+  The shipped artifact itself is covered by
+  [`basecamp-appimage-smoke`](basecamp-appimage-smoke.md). Together they say:
+  the binary users download starts cleanly, and the code inside it drives a
+  working UI.
+
+what_you_build: "Basecamp at the pinned commit, driven headlessly against a user directory holding every module and UI app in the release set."
+
+what_you_learn:
+  - How to populate a Basecamp `--user-dir` from the module catalog
+  - Why the UI test rebuilds the pinned commit instead of using the release asset
+  - How to drive a Qt/QML app headlessly with `logos-qt-mcp`
+  - How to assert that installed UI plugins actually appear in the running app
+
+prerequisites:
+  - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
+  - "**Nix** with flakes enabled — builds the inspector-enabled bundle and the test driver."
+  - "**On Linux:** the usual desktop graphics libraries (`libopengl0`, `libgl1`, `libegl1`). The portable bundle loads them from the host, exactly as it would on a real desktop."
+  - "**`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API)."
+
+sections:
+  - title: "Resolve the release set"
+    step: true
+    text: |
+      The resolver turns the pinned tags and versions into
+      `release-set.lock.json`. The Basecamp entry's `commit` is what this spec
+      builds — the release tag resolved to an immutable sha.
+    steps:
+      - title: "Resolve"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" lock'
+        code_block: "./doctests/release-set.sh lock"
+        check_file: "release-set.lock.json"
+      - title: "Show the Basecamp commit under test"
+        run: |
+          "$RELEASE_SET_DIR/doctests/release-set.sh" field apps logos-basecamp tag
+          "$RELEASE_SET_DIR/doctests/release-set.sh" field apps logos-basecamp commit
+        code_block: "./doctests/release-set.sh field apps logos-basecamp commit"
+
+  - title: "Populate a user directory from the catalog"
+    step: true
+    text: |
+      Every module and UI app in the release set, at its pinned version,
+      checksum-verified against the catalog index, installed into one
+      `--user-dir` tree. `lgpm` routes each package by its manifest `type`:
+      `core` to `--modules-dir`, `ui_qml` to `--ui-plugins-dir`.
+    steps:
+      - title: "Fetch lgpd and lgpm"
+        run: |
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-downloader lgpd
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
+        code_block: |
+          ./doctests/release-set.sh fetch logos-package-downloader lgpd
+          ./doctests/release-set.sh fetch logos-package-manager lgpm
+        check_file: "bin/lgpm"
+      - title: "Install everything the set pins"
+        run: |
+          mkdir -p testdata/modules testdata/plugins
+          MODULES_DIR=./testdata/modules PLUGINS_DIR=./testdata/plugins \
+            "$RELEASE_SET_DIR/doctests/release-set.sh" install-all
+        code_block: |
+          lgpm --modules-dir ./testdata/modules --ui-plugins-dir ./testdata/plugins \
+               install --file packages/<each>.lgx
+        expect_contains:
+          - "sha256 OK"
+      - title: "See what landed where"
+        run: |
+          echo "--- core modules ---"; ls testdata/modules
+          echo "--- ui plugins ---";   ls testdata/plugins
+        code_block: |
+          ls testdata/modules
+          ls testdata/plugins
+        expect_contains:
+          - "storage_ui"
+
+  - title: "Build the app under test"
+    step: true
+    text: |
+      `#bin-bundle-dir-inspector` at the resolved commit: the portable bundle,
+      identical to the shipping one except the QML inspector is compiled in so
+      `logos-qt-mcp` can attach. Portable matters — the catalog packages in the
+      user directory are portable variants, and a dev build would RPATH into
+      `/nix/store` and refuse to load beside them.
+    steps:
+      - title: "Build Basecamp at the pinned commit"
+        run: |
+          COMMIT="$("$RELEASE_SET_DIR/doctests/release-set.sh" field apps logos-basecamp commit)"
+          nix build "github:logos-co/logos-basecamp/$COMMIT#bin-bundle-dir-inspector" -o result-bundle
+        code_block: "nix build 'github:logos-co/logos-basecamp/<pinned commit>#bin-bundle-dir-inspector' -o result-bundle"
+        check_file: "result-bundle/bin/LogosBasecamp"
+      - title: "Build the test driver"
+        run: "nix build 'github:logos-co/logos-qt-mcp' -o result-mcp"
+        code_block: "nix build 'github:logos-co/logos-qt-mcp' -o result-mcp"
+        check_file: "result-mcp"
+
+  - title: "Launch it and walk the UI"
+    step: true
+    text: |
+      The app launches headless (`QT_QPA_PLATFORM=offscreen`) against the user
+      directory we just populated. Every assertion below is a real round-trip
+      through the running app: the sidebar renders, the views load, and the UI
+      plugins installed from the catalog show up where a user would find them.
+    steps:
+      - title: "Launch and drive Basecamp"
+        ui_test:
+          launch: "./result-bundle/bin/LogosBasecamp --user-dir ./testdata"
+          qt_mcp: "result-mcp"
+          # A cold first boot has to load every core module in the user-dir
+          # before the QML tree settles, so allow well past the default wait.
+          launch_timeout: 600
+          tests:
+            - name: "App window opens with the sidebar visible"
+              action: wait_for
+              texts: ["Applications", "Package Manager", "Settings"]
+              timeout: 120000
+              text: "Basecamp launches headless against the release set's user directory. The sidebar renders with **Applications**, **Package Manager** and **Settings**."
+              screenshot: "basecamp-launch.png"
+
+            - name: "Open the Applications view"
+              action: click
+              target: "Applications"
+
+            - name: "Applications view loads"
+              action: wait_for
+              texts: ["Install and manage applications."]
+              timeout: 60000
+              text: "The **Applications** view lists what is installed — every UI app this release set pins."
+              screenshot: "basecamp-applications.png"
+
+            - name: "Open Settings"
+              action: click
+              target: "Settings"
+
+            - name: "Settings view loads"
+              action: wait_for
+              texts: ["Manage modules, apps and dashboards.", "Sections"]
+              timeout: 60000
+              screenshot: "basecamp-settings.png"
+
+            - name: "Open the UI Modules tab"
+              action: click
+              target: "UI Modules"
+
+            - name: "The installed UI plugins are listed"
+              action: wait_for
+              texts: ["UI Modules", "Available UI plugins in the system"]
+              timeout: 60000
+              text: "The UI plugins installed from the catalog appear in **Settings → Modules → UI Modules**."
+              screenshot: "basecamp-ui-modules.png"
+
+            - name: "Open the Core Modules tab"
+              action: click
+              target: "Core Modules"
+
+            - name: "The installed core modules are listed"
+              action: wait_for
+              texts: ["Core Modules", "All available plugins in the system"]
+              timeout: 60000
+              text: "And the core modules the release set pins appear alongside them."
+              screenshot: "basecamp-core-modules.png"
+        post_text: |
+          Every element asserted above rendered from a user directory built
+          entirely out of this release set: the modules and UI plugins came from
+          the catalog at their pinned versions, and the app hosting them is the
+          pinned Basecamp commit. That is the set working together, not just
+          each part working alone.

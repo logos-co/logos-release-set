@@ -1,0 +1,171 @@
+name: "Smoke-testing the shipped Basecamp artifact"
+output: basecamp-appimage-smoke.md
+release: ""
+
+intro: |
+  This doc-test runs **the artifact a user actually downloads** — the Basecamp
+  AppImage (Linux) or `.dmg` (macOS) attached to the release the release set
+  pins — against a user directory populated with every module and UI app in the
+  set, installed from the catalog with `lgpd` and `lgpm`.
+
+  It is deliberately a *smoke* test. Shipping builds have the QML inspector
+  compiled out (it is a test-only feature, off in every release artifact), so
+  nothing can drive their UI. What this proves is still worth proving: the
+  shipped binary starts on a real user-dir full of pinned modules, stays up, and
+  reports no plugin or QML load failures.
+
+  The companion spec, [`basecamp-ui`](basecamp-ui.md), drives the UI properly by
+  rebuilding the *same pinned commit* with the inspector enabled.
+
+what_you_build: "The shipped Basecamp artifact, launched headless against a user directory holding every module and UI app in the release set."
+
+what_you_learn:
+  - How to populate a Basecamp `--user-dir` from the module catalog
+  - Why core modules and UI plugins land in different directories
+  - How to smoke-test a shipping artifact that cannot be driven by a test harness
+  - What "the inspector is off in release builds" means for what is testable
+
+prerequisites:
+  - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
+  - "**On Linux:** the usual desktop graphics libraries (`libopengl0`, `libgl1`, `libegl1`). The portable bundle loads them from the host, exactly as it would on a real desktop."
+  - "**`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API)."
+
+sections:
+  - title: "Resolve the release set"
+    step: true
+    text: |
+      The resolver turns the pinned tags and versions into
+      `release-set.lock.json` — repository URL, commit, download URL and checksum
+      for every artifact.
+    steps:
+      - title: "Resolve"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" lock'
+        code_block: "./doctests/release-set.sh lock"
+        check_file: "release-set.lock.json"
+
+  - title: "Fetch the package manager CLIs"
+    step: true
+    text: |
+      `lgpd` and `lgpm` at the tags the release set pins — the same tools a user
+      would install packages with.
+    steps:
+      - title: "Fetch lgpd and lgpm"
+        run: |
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-downloader lgpd
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
+        code_block: |
+          ./doctests/release-set.sh fetch logos-package-downloader lgpd
+          ./doctests/release-set.sh fetch logos-package-manager lgpm
+        check_file: "bin/lgpm"
+
+  - title: "Populate a user directory from the catalog"
+    step: true
+    text: |
+      Every module and UI app in the release set, downloaded at its pinned
+      version, checksum-verified, and installed into one `--user-dir` tree.
+
+      `lgpm` decides where each package lands purely from its manifest `type`:
+      `core` modules go to `--modules-dir`, `ui_qml` plugins to
+      `--ui-plugins-dir`. Basecamp reads both from the user directory at
+      startup.
+    steps:
+      - title: "Install everything the set pins"
+        run: |
+          mkdir -p testdata/modules testdata/plugins
+          MODULES_DIR=./testdata/modules PLUGINS_DIR=./testdata/plugins \
+            "$RELEASE_SET_DIR/doctests/release-set.sh" install-all
+        code_block: |
+          lgpm --modules-dir ./testdata/modules --ui-plugins-dir ./testdata/plugins \
+               install --file packages/<each>.lgx
+        expect_contains:
+          - "sha256 OK"
+      - title: "See what landed where"
+        run: |
+          echo "--- core modules ---"; ls testdata/modules
+          echo "--- ui plugins ---";   ls testdata/plugins
+        code_block: |
+          ls testdata/modules
+          ls testdata/plugins
+        expect_contains:
+          - "storage_module"
+          - "storage_ui"
+
+  - title: "Fetch the shipped Basecamp artifact"
+    step: true
+    text: |
+      The release asset itself: an AppImage on Linux (extracted rather than
+      mounted — CI runners have no FUSE), a `.dmg` on macOS.
+    steps:
+      - title: "Fetch Basecamp"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-basecamp LogosBasecamp'
+        code_block: "./doctests/release-set.sh fetch logos-basecamp LogosBasecamp"
+        check_file: "bin/LogosBasecamp"
+        post_text: |
+          If the pinned release publishes no artifact for this platform the step
+          reports `SKIP:` and the spec is skipped rather than failed — the
+          release description then lists the platform as not validated.
+
+  - title: "Launch it headless and watch it"
+    step: true
+    text: |
+      `QT_QPA_PLATFORM=offscreen` renders to an offscreen buffer, so no display
+      is needed. The app gets the populated user directory and 45 seconds to
+      boot, load its plugins, and settle.
+    steps:
+      - title: "Launch"
+        run: |
+          QT_QPA_PLATFORM=offscreen ./bin/LogosBasecamp --user-dir ./testdata \
+            > basecamp.log 2>&1 &
+          echo $! > basecamp.pid
+          sleep 45
+        code_block: |
+          QT_QPA_PLATFORM=offscreen LogosBasecamp --user-dir ./testdata > basecamp.log &
+
+      - title: "Check it is still alive and clean"
+        text: |
+          Three assertions: the process survived the boot, the QML engine did not
+          fail to load a component, and no plugin failed to load. A shipping
+          binary that starts and stays up on a full user-dir is what this spec
+          exists to prove.
+        run: |
+          set +e
+          pid="$(cat basecamp.pid)"
+          failed=0
+
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "process alive after boot"
+          else
+            echo "FAIL: process exited during boot"; failed=1
+          fi
+
+          for pattern in \
+            "QQmlApplicationEngine failed" \
+            "Cannot load library" \
+            "is not a type" \
+            "Failed to load plugin"
+          do
+            if grep -qF "$pattern" basecamp.log; then
+              echo "FAIL: log contains: $pattern"
+              grep -F "$pattern" basecamp.log | head -3
+              failed=1
+            fi
+          done
+
+          kill "$pid" 2>/dev/null || true
+          sleep 2
+
+          echo "--- last 20 log lines ---"
+          tail -20 basecamp.log
+
+          if [ "$failed" -eq 0 ]; then echo "smoke OK"; else echo "smoke FAILED"; fi
+          exit "$failed"
+        code_block: |
+          kill -0 "$(cat basecamp.pid)"          # still running?
+          grep -F "Cannot load library" basecamp.log   # nothing failed to load?
+        expect_contains:
+          - "process alive after boot"
+          - "smoke OK"
+        post_text: |
+          The shipped artifact boots on a user directory built entirely from this
+          release set. For assertions about what the UI actually *shows*, see
+          [`basecamp-ui`](basecamp-ui.md) — same commit, inspector enabled.
