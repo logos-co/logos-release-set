@@ -1,5 +1,9 @@
 name: Validate and publish release set
 
+# Names each dispatch in the run list by the branch it validated, so a history
+# of runs reads as a history of release sets rather than five identical rows.
+run-name: "Release set from ${{ github.ref_name }}"
+
 # Manual only. `main` holds CHANGE-ME placeholders and is expected to fail the
 # pin check immediately; run this from a release branch with the versions
 # filled in.
