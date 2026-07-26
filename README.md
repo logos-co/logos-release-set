@@ -5,7 +5,7 @@ one file naming the exact release of every Logos component that is published and
 supported as a unit, plus the machinery to prove that set actually works.
 
 ```
-release-set.json          what a human pins   (4 tags + 11 versions)
+release-set.json          what a human pins   (5 tags + 11 versions)
         │
         │  scripts/resolve.py
         ▼
@@ -108,6 +108,22 @@ Everything is the **portable** variant, end to end. A dev build RPATHs into
 `/nix/store` and will not load beside portable catalog packages, so probes build
 `#lgx-portable` and the Basecamp under test is the portable bundle.
 
+### Two things that look like details and are not
+
+**Fetched tools are launched through an `exec` wrapper, never a symlink.**
+`logoscore` finds `logos_host` next to its own executable and its bundled
+modules at `../modules`. On macOS that lookup uses `_NSGetExecutablePath`, which
+reports the path the process was *invoked* with and does not resolve symlinks —
+so behind a symlink the runtime searches `./bin`, reports `logos_host not
+found`, and **every module load fails**. `exec` replaces the process image, so
+the running program's own path is the real one inside the bundle. The same
+applies to launching Basecamp, hence `release-set.sh path`.
+
+**`capability_module` is seeded into the modules directory.** It is the auth
+handshake every `load-module` needs, and it ships inside the `logoscore` bundle.
+Copying it into the directory passed to `-m` makes the runtime independent of
+where it thinks its own bundle is.
+
 ### Why two Basecamp specs
 
 The QML inspector is a compile-time feature and is **off in every shipping
@@ -134,14 +150,19 @@ export RELEASE_SET_DIR="$PWD" GITHUB_TOKEN=...
 2. **doctests** — the three platforms in parallel. If the set pins an artifact
    that a platform does not publish, the affected spec is **skipped, not
    failed** — a release with no linux-arm64 AppImage leaves nothing to
-   smoke-test there, which is not a failure of the release set.
+   smoke-test there, which is not a failure of the release set. Skipping is
+   decided **up front** by `select-specs.py` reading the lock, not discovered
+   mid-run: the doc-test runner treats any non-zero exit as a hard failure, so a
+   spec that started can only pass or fail.
 3. **publish** — only on green, and never from `main`: a release tagged
    `v<version>` carrying `release-set.lock.json` and the per-platform HTML
    reports, with a description that links every binary, every `.lgx`, every
    source commit, and a table of what was skipped and why.
 
 Skipped platforms are always named in the release description. A release that
-does not mention a platform passed there.
+does not mention a platform passed there. And "everything succeeded" means at
+least one doc-test actually passed — a set whose every spec was skipped
+everywhere is validated by nothing, so publishing refuses.
 
 The release **links** to artifacts rather than mirroring them — the binaries
 already live in their own repos' releases and the `.lgx` files in the catalog,

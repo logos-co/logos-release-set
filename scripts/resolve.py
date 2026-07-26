@@ -34,6 +34,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -52,6 +53,8 @@ LGX_VARIANT = {
     "linux-arm64": "linux-arm64",
     "macos-arm64": "darwin-arm64",
 }
+
+PLATFORM_ORDER = {name: i for i, name in enumerate(PLATFORMS)}
 
 
 # --------------------------------------------------------------------------
@@ -139,16 +142,62 @@ def resolve_tag_commit(repo, tag):
     return obj["sha"]
 
 
-def ci_run_url(repo, sha):
-    """Best-effort: the workflow run that built this commit."""
+def ci_run_url(repo, sha, prefer=None, before=None):
+    """The workflow run that BUILT this commit.
+
+    Not simply the newest run at that sha. A catalog repo runs a periodic
+    "Rebuild index" cron on its default branch, so the most recent run at a
+    release commit is usually that cron — identical for every package sharing
+    the commit, and telling you nothing about how any artifact was built.
+
+    `prefer` is a workflow-name prefix to favour (e.g. "Release logos-storage-
+    module"); `before` is an ISO timestamp the run must not post-date, so a
+    later re-run cannot be mistaken for the original build.
+    """
     try:
-        runs = api(f"/repos/{repo}/actions/runs?head_sha={sha}&per_page=1")
+        runs = api(f"/repos/{repo}/actions/runs?head_sha={sha}&per_page=50")
     except GitHubError:
         return None
-    if not runs:
+    items = (runs or {}).get("workflow_runs") or []
+    if not items:
         return None
-    items = runs.get("workflow_runs") or []
-    return items[0].get("html_url") if items else None
+
+    # Scheduled runs are housekeeping, never a build of a specific artifact.
+    candidates = [r for r in items if r.get("event") != "schedule"] or items
+
+    if prefer:
+        named = [r for r in candidates
+                 if (r.get("name") or "").lower().startswith(prefer.lower())]
+        if named:
+            candidates = named
+
+    if before:
+        # Runs come newest-first; take the newest that does not post-date the
+        # artifact it supposedly produced.
+        not_after = [r for r in candidates if (r.get("created_at") or "") <= before]
+        if not_after:
+            candidates = not_after
+
+    return candidates[0].get("html_url")
+
+
+# Preference among several assets for the same platform: plain tarballs are the
+# easiest to consume, then AppImages, then macOS app bundles and disk images.
+# Without an explicit order the pick is whatever order GitHub returned.
+ASSET_PREFERENCE = [".app.tar.gz", ".dmg", ".pkg", ".appimage", ".tar.gz", ".tgz"]
+
+
+def asset_rank(name):
+    low = name.lower()
+    if low.endswith(".tar.gz") and not low.endswith(".app.tar.gz"):
+        return 0
+    if low.endswith(".appimage"):
+        return 1
+    if low.endswith(".app.tar.gz") or low.endswith(".app.zip"):
+        return 2
+    if low.endswith(".dmg"):
+        return 3
+    return 9
 
 
 def classify_asset(name):
@@ -158,7 +207,12 @@ def classify_asset(name):
     and Basecamp's `LogosBasecamp-Desktop-v<ver>-<sha>-<arch>.{AppImage,dmg}`.
     """
     low = name.lower()
-    is_mac = ".dmg" in low or "macos" in low or "darwin" in low
+    # `.app` bundles and `.pkg` installers are macOS artifacts even when the
+    # filename says only the architecture — logos-basecamp publishes
+    # `logos-basecamp-aarch64-unsigned.app.tar.gz` beside its Linux AppImage,
+    # and without this a linux-arm64 runner would download a Mach-O bundle.
+    is_mac = (".dmg" in low or "macos" in low or "darwin" in low
+              or ".app.tar" in low or ".app.zip" in low or low.endswith(".pkg"))
     is_arm = "aarch64" in low or "arm64" in low
     is_x86 = "x86_64" in low or "amd64" in low
 
@@ -191,6 +245,9 @@ def resolve_binary_repo(name, repo, tag, kind):
     commit = resolve_tag_commit(repo, tag)
     release = api(f"/repos/{repo}/releases/tags/{tag}")
     assets = [asset_entry(a) for a in (release or {}).get("assets", [])]
+    # Sort so that "the first asset for platform X" is always the best one —
+    # consumers (doctests/release-set.sh, the release notes) take the first match.
+    assets.sort(key=lambda a: (PLATFORM_ORDER.get(a["platform"], 99), asset_rank(a["name"])))
 
     entry = {
         "name": name,
@@ -294,6 +351,26 @@ def module_map(catalog_repo, catalog_commit):
     return mapping
 
 
+_tags_cache = {}
+
+
+def source_tag_for(repo, commit):
+    """The tag in a source repo pointing at `commit`, or None if untagged.
+
+    /tags reports the commit sha directly, so annotated tags need no extra
+    dereference round-trip.
+    """
+    if repo not in _tags_cache:
+        try:
+            _tags_cache[repo] = api(f"/repos/{repo}/tags?per_page=100") or []
+        except GitHubError:
+            _tags_cache[repo] = []
+    for tag in _tags_cache[repo]:
+        if (tag.get("commit") or {}).get("sha") == commit:
+            return tag.get("name")
+    return None
+
+
 def find_index_version(index, name, version):
     for pkg in index.get("packages", []):
         if pkg.get("name") != name:
@@ -315,6 +392,15 @@ def resolve_catalog_package(name, version, catalog_repo, index):
     publisher_ref = entry_index.get("publisherRef") or f"{name}-v{version}"
     catalog_commit = resolve_tag_commit(catalog_repo, publisher_ref)
     source = module_map(catalog_repo, catalog_commit).get(name)
+    if source is None:
+        # The release set promises a commit for every artifact. Degrading to a
+        # null here would publish a lock — and release notes — with no
+        # provenance for this package, and exit 0 while doing it.
+        raise GitHubError(
+            f"{name}@{version}: no submodule of {catalog_repo}@{catalog_commit} "
+            f"has a metadata.json declaring name {name!r}, so its source commit "
+            "cannot be determined"
+        )
 
     manifest = entry_index.get("manifest") or {}
     variants = sorted((manifest.get("main") or {}).keys())
@@ -325,16 +411,22 @@ def resolve_catalog_package(name, version, catalog_repo, index):
         "version": version,
         "type": manifest.get("type"),
         "publisherRef": publisher_ref,
-        "repo": (source or {}).get("repo"),
-        "repoUrl": (source or {}).get("repoUrl"),
-        "commit": (source or {}).get("commit"),
-        # Source repos are not tagged per catalog release; identity is
-        # publisherRef + commit.
-        "tag": None,
-        "submoduleDir": (source or {}).get("dir"),
+        "repo": source["repo"],
+        "repoUrl": source["repoUrl"],
+        "commit": source["commit"],
+        # A source repo may or may not tag the commit the catalog built from.
+        # Report the tag when one exists; null means genuinely untagged, not
+        # "we didn't look".
+        "tag": source_tag_for(source["repo"], source["commit"]),
+        "submoduleDir": source["dir"],
         "catalogCommit": catalog_commit,
         "catalogReleaseUrl": f"https://github.com/{catalog_repo}/releases/tag/{publisher_ref}",
-        "ciRunUrl": ci_run_url(catalog_repo, catalog_commit),
+        # The catalog's per-module release workflow is named "Release <dir>";
+        # without that hint every package at this commit would report the
+        # periodic index-rebuild cron instead.
+        "ciRunUrl": ci_run_url(catalog_repo, catalog_commit,
+                               prefer=f"Release {source['dir']}",
+                               before=entry_index.get("releasedAt")),
         "lgx": {
             "url": entry_index.get("url"),
             "size": entry_index.get("size"),
@@ -350,6 +442,16 @@ def resolve_catalog_package(name, version, catalog_repo, index):
 # --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
+
+def check_version_shape(version):
+    """The release set's own version must be A.B.C.D — it becomes the tag."""
+    if version == PLACEHOLDER:
+        return None
+    if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version or ""):
+        return (f"version {version!r} is not of the form A.B.C.D "
+                "(four dot-separated numbers, e.g. 0.2.1.0)")
+    return None
+
 
 def find_placeholders(spec):
     out = []
@@ -462,6 +564,12 @@ def main():
         print("\nFill these in on a release branch — main is expected to keep "
               "placeholders.", file=sys.stderr)
         return 1
+
+    shape_error = check_version_shape(spec.get("version"))
+    if shape_error:
+        print(f"error: {shape_error}", file=sys.stderr)
+        return 1
+
     if args.check:
         print(f"{args.spec}: pins OK", file=sys.stderr)
         return 0

@@ -21,19 +21,39 @@ import sys
 TOOLS = ["logos-logoscore-cli", "logos-package-downloader", "logos-package-manager"]
 PM_TOOLS = ["logos-package-downloader", "logos-package-manager"]
 
+BUILDER = ["logos-module-builder"]
+
 # What each spec needs on the runner's own platform.
 #   apps      — released binaries that must exist for this platform
 #   packages  — catalog packages that must publish this platform's variant
 #               ("*" means every module and UI app in the set)
+#   devUtils  — dev utils the spec exercises. Not gating (they are consumed as
+#               flake refs and publish no per-platform binaries), but recorded
+#               so each artifact can point at the doc-tests that covered it.
 SPECS = {
-    "headless-storage-module":    {"apps": TOOLS,    "packages": ["storage_module"]},
-    "headless-delivery-module":   {"apps": TOOLS,    "packages": ["delivery_module"]},
-    "headless-blockchain-module": {"apps": TOOLS,    "packages": ["blockchain_module"]},
+    "headless-storage-module":    {"apps": TOOLS, "packages": ["storage_module"],
+                                   "devUtils": BUILDER},
+    "headless-delivery-module":   {"apps": TOOLS, "packages": ["delivery_module"],
+                                   "devUtils": BUILDER},
+    "headless-blockchain-module": {"apps": TOOLS, "packages": ["blockchain_module"],
+                                   "devUtils": BUILDER},
     # Launches the shipped Basecamp artifact, so that artifact must exist.
-    "basecamp-appimage-smoke":    {"apps": PM_TOOLS + ["logos-basecamp"], "packages": ["*"]},
+    "basecamp-appimage-smoke":    {"apps": PM_TOOLS + ["logos-basecamp"],
+                                   "packages": ["*"], "devUtils": []},
     # Builds Basecamp from the pinned commit, so it needs no Basecamp asset.
-    "basecamp-ui":                {"apps": PM_TOOLS, "packages": ["*"]},
+    "basecamp-ui":                {"apps": PM_TOOLS, "packages": ["*"], "devUtils": []},
 }
+
+
+def specs_covering(name, lock):
+    """Which doc-tests exercise this component."""
+    every_package = [i["name"] for i in lock.get("modules", []) + lock.get("uiApps", [])]
+    covering = []
+    for spec, needs in sorted(SPECS.items()):
+        packages = every_package if needs["packages"] == ["*"] else needs["packages"]
+        if name in needs["apps"] or name in packages or name in needs.get("devUtils", []):
+            covering.append(spec)
+    return covering
 
 
 def index_by_name(lock):

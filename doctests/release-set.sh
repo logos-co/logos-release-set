@@ -8,6 +8,9 @@
 #   release-set.sh platform                 print this machine's platform id
 #   release-set.sh pin <group> <name>       print the pinned tag/version
 #   release-set.sh fetch <component> <bin>  download + extract a released binary
+#   release-set.sh path <bin>               print the REAL path behind ./bin/<bin>
+#   release-set.sh seed-modules <component> copy a tool's bundled modules into MODULES_DIR
+#   release-set.sh wait-daemon [secs]       block until the logoscore daemon answers
 #   release-set.sh install <pkg> [...]      lgpd download + verify + lgpm install
 #
 # Exit code 78 means "this artifact is not published for this platform" — the
@@ -137,6 +140,26 @@ PY
 # FUSE, so we always --appimage-extract and run the extracted AppRun.
 # macOS artifacts are plain directory bundles (.tar.gz) or a .dmg.
 
+# Expose a fetched binary as ./bin/<name>.
+#
+# A wrapper that `exec`s the real file, NOT a symlink. These tools locate their
+# siblings relative to their own executable: logoscore looks for `logos_host`
+# next to itself and for `../modules`. On macOS that lookup uses
+# _NSGetExecutablePath, which reports the path the process was INVOKED with and
+# does not resolve symlinks — so through a symlink logoscore searches ./bin and
+# reports "logos_host not found", and every module load fails. `exec` replaces
+# the process image, so the running program's own path is the real one inside
+# the bundle and both lookups land where they should, on every platform.
+link_binary() {
+  local binname="$1" target="$2"
+  cat > "$BIN/$binname" <<WRAPPER
+#!/usr/bin/env sh
+exec "$target" "\$@"
+WRAPPER
+  chmod +x "$BIN/$binname"
+  printf '%s\n' "$target" > "$BIN/.$binname.path"
+}
+
 cmd_fetch() {
   local component="${1:?usage: fetch <component> <bin-name>}"
   local binname="${2:?usage: fetch <component> <bin-name>}"
@@ -172,18 +195,74 @@ cmd_fetch() {
   if [ -n "$appimage" ]; then
     chmod +x "$appimage"
     ( cd "$workdir" && "./$(basename "$appimage")" --appimage-extract >/dev/null )
-    ln -sf "$PWD/$workdir/squashfs-root/AppRun" "$BIN/$binname"
+    link_binary "$binname" "$PWD/$workdir/squashfs-root/AppRun"
     echo "    -> $BIN/$binname (AppImage, extracted)"
     return
   fi
 
-  # A directory bundle: find the executable, either in bin/ or inside a .app.
+  # A directory bundle: find the executable by NAME, either in bin/ or inside a
+  # .app's Contents/MacOS/. Matching "*/MacOS/*" instead would take whichever
+  # executable the filesystem returned first — Basecamp's .app ships
+  # LogosBasecamp, LogosBasecamp.bin, ui-host, logoscore and logos_host side by
+  # side, so an unanchored match silently launches the wrong program.
   local exe
   exe="$(find "$workdir" -type f -perm -u+x \
-           \( -path "*/bin/$binname" -o -path "*/MacOS/*" \) -print -quit)"
-  [ -n "$exe" ] || die "no $binname executable found in $(basename "$url")"
-  ln -sf "$PWD/$exe" "$BIN/$binname"
-  echo "    -> $BIN/$binname (bundle)"
+           \( -path "*/bin/$binname" -o -path "*/MacOS/$binname" \) -print -quit)"
+  [ -n "$exe" ] || die "no executable named '$binname' in $(basename "$url") — \
+found: $(find "$workdir" -type f -perm -u+x \( -path '*/bin/*' -o -path '*/MacOS/*' \) \
+-exec basename {} \; | sort -u | tr '\n' ' ')"
+  link_binary "$binname" "$PWD/$exe"
+  echo "    -> $BIN/$binname (bundle: ${exe#"$workdir"/})"
+}
+
+# path — the real file behind ./bin/<name>, recorded when it was fetched.
+cmd_path() {
+  local binname="${1:?usage: path <bin-name>}"
+  [ -f "$BIN/.$binname.path" ] || die "no such fetched binary: $binname"
+  cat "$BIN/.$binname.path"
+}
+
+# wait-daemon — block until logoscore answers, or give up.
+#
+# Startup is not instantaneous and not constant: the daemon loads
+# capability_module before it writes its client config, which takes a couple of
+# seconds on a warm machine and longer on a loaded CI runner. A fixed sleep
+# either races or wastes time; polling does neither.
+cmd_wait_daemon() {
+  local timeout="${1:-60}" i=1
+  while [ "$i" -le "$timeout" ]; do
+    if "$BIN/logoscore" status >/dev/null 2>&1; then
+      echo "==> daemon ready after ${i}s"
+      "$BIN/logoscore" status
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  echo "--- daemon log ---" >&2
+  tail -30 logs.txt >&2 2>/dev/null || true
+  die "logoscore did not become ready within ${timeout}s"
+}
+
+# seed-modules — copy a fetched tool's bundled modules into MODULES_DIR.
+#
+# logoscore ships capability_module inside its own bundle and finds it relative
+# to its executable. Because we run it through a symlink in ./bin, that lookup
+# lands on our lgpm target directory on macOS (see `path` above) and the module
+# is never found — every load-module then stalls on capability negotiation and
+# fails. Copying the bundled modules into the directory we pass to `-m` makes
+# the tool independent of that resolution, on every platform.
+cmd_seed_modules() {
+  local component="${1:?usage: seed-modules <component>}"
+  local modules_dir="${MODULES_DIR:-./modules}"
+  local src
+  src="$(find ".fetch/$component" -maxdepth 3 -type d -name modules -print -quit 2>/dev/null || true)"
+  [ -n "$src" ] || die "$component has no bundled modules/ directory — was it fetched?"
+  mkdir -p "$modules_dir"
+  # -L dereferences: nix bundles are full of symlinks into the store.
+  cp -RL "$src"/. "$modules_dir"/
+  chmod -R u+w "$modules_dir" 2>/dev/null || true
+  echo "==> seeded $(ls "$src" | tr '\n' ' ')from $component into $modules_dir"
 }
 
 # ---------------------------------------------------------------------------
@@ -265,8 +344,11 @@ case "${1:-}" in
   platform) detect_platform ;;
   pin)      shift; cmd_pin "$@" ;;
   field)    shift; cmd_field "$@" ;;
-  fetch)       shift; cmd_fetch "$@" ;;
-  install)     shift; cmd_install "$@" ;;
-  install-all) shift; cmd_install_all "$@" ;;
-  *) die "usage: release-set.sh {lock|platform|pin|field|fetch|install|install-all} ..." ;;
+  fetch)        shift; cmd_fetch "$@" ;;
+  path)         shift; cmd_path "$@" ;;
+  seed-modules) shift; cmd_seed_modules "$@" ;;
+  wait-daemon)  shift; cmd_wait_daemon "$@" ;;
+  install)      shift; cmd_install "$@" ;;
+  install-all)  shift; cmd_install_all "$@" ;;
+  *) die "usage: release-set.sh {lock|platform|pin|field|fetch|path|seed-modules|install|install-all} ..." ;;
 esac

@@ -19,8 +19,43 @@ Usage:
 """
 
 import argparse
+import importlib.util
 import json
+import os
 import sys
+
+
+def _load_select_specs():
+    """select-specs.py is not an importable module name (hyphen)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "select-specs.py")
+    spec = importlib.util.spec_from_file_location("select_specs", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def attach_validation(lock):
+    """Give every artifact the doc-tests and report links that covered it.
+
+    The release set promises per-asset build provenance: the CI run that
+    produced it (resolved earlier) and the report of the test that exercised it.
+    `tests[]` alone is indexed by (spec, platform), so without this an asset has
+    no direct pointer to its own evidence.
+    """
+    selector = _load_select_specs()
+    for group in ("apps", "devUtils", "modules", "uiApps"):
+        for item in lock.get(group, []):
+            covering = selector.specs_covering(item["name"], lock)
+            item["validatedBy"] = [
+                {
+                    "spec": test["spec"],
+                    "platform": test["platform"],
+                    "status": test["status"],
+                    "reportUrl": test.get("reportUrl"),
+                }
+                for test in lock.get("tests", [])
+                if test["spec"] in covering
+            ]
 
 PLATFORM_LABELS = {
     "linux-x86_64": "linux x86_64",
@@ -185,6 +220,7 @@ def main():
         with open(path, encoding="utf-8") as handle:
             tests.extend(json.load(handle))
     lock["tests"] = sorted(tests, key=lambda t: (t["spec"], t["platform"]))
+    attach_validation(lock)
 
     if args.out_lock:
         with open(args.out_lock, "w", encoding="utf-8") as handle:
@@ -198,7 +234,18 @@ def main():
         sys.stdout.write(notes)
 
     failed = [t for t in lock["tests"] if t["status"] == "failed"]
-    return 1 if failed else 0
+    passed = [t for t in lock["tests"] if t["status"] == "passed"]
+    if failed:
+        print(f"{len(failed)} doc-test(s) failed", file=sys.stderr)
+        return 1
+    if not passed:
+        # "If everything succeeds, publish" must not degrade into "if nothing
+        # failed, publish". A set whose every spec was skipped on every platform
+        # has been validated by nothing at all.
+        print("no doc-test passed on any platform — nothing was actually "
+              "validated, refusing to publish", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

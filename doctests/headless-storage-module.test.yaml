@@ -79,6 +79,18 @@ sections:
       - title: "Confirm the versions"
         run: "./bin/logoscore --version && ./bin/lgpm --help | head -3"
         code_block: "logoscore --version"
+      - title: "Seed the runtime's own modules"
+        text: |
+          `logoscore` ships `capability_module` — the auth handshake every
+          `load-module` needs — inside its bundle, and finds it relative to its
+          own executable. We run it through `./bin/logoscore`, and on macOS that
+          lookup follows the *symlink* path rather than the bundle, so the module
+          would never be found and every load would stall then fail. Copying the
+          bundled modules into the directory we hand to `-m` removes the
+          dependency on that resolution entirely.
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" seed-modules logos-logoscore-cli'
+        code_block: "cp -RL <logoscore-bundle>/modules/. ./modules/"
+        check_file: "modules/capability_module"
 
   - title: "Install the pinned storage_module"
     step: true
@@ -114,7 +126,15 @@ sections:
       - title: "Start the daemon"
         run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
         code_block: "logoscore -D -m ./modules > logs.txt &"
-      - run: "sleep 3"
+      - title: "Wait for it to come up"
+        text: |
+          The daemon loads `capability_module` before it publishes its client
+          config, so it is answerable a few seconds after launch — longer on a
+          loaded runner. Poll rather than guess at a sleep.
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" wait-daemon 90'
+        code_block: "logoscore status"
+        expect_contains:
+          - '"status":"running"'
       - title: "List what the daemon discovered"
         run: "./bin/logoscore list-modules"
         code_block: "logoscore list-modules"
@@ -135,11 +155,13 @@ sections:
   - title: "Initialize the node"
     step: true
     text: |
-      This is the node operator guide's storage step, with one deliberate change:
-      the guide sets `"nat": "extip:<public-ip>"` and binds discovery ports,
-      which a CI runner (no public IP, no inbound ports) cannot satisfy. We use
-      `"nat": "none"` instead. Everything else — `init` with a config file, then
-      `start` — is the documented sequence.
+      This is the node operator guide's storage step. Its config is reproduced
+      key for key — `data-dir`, `log-level`, `listen-ip`, `listen-port`,
+      `disc-port` and `network: "logos.test"`, the key that selects the testnet
+      — with exactly one deliberate change: the guide sets
+      `"nat": "extip:<public-ip>"`, which a CI runner (no public IP, no inbound
+      ports) cannot satisfy, so we use `"nat": "none"`. The one addition is
+      `log-file`, so the node's log lands somewhere the doc-test can show you.
 
       `init` is synchronous; `start` completes asynchronously and announces
       itself with a `storageStart` event, so we begin watching before calling it.
@@ -152,7 +174,11 @@ sections:
             "data-dir": "$(pwd)/storage-data",
             "log-level": "INFO",
             "log-file": "$(pwd)/storage-data/storage.log",
-            "nat": "none"
+            "listen-ip": "0.0.0.0",
+            "listen-port": 8091,
+            "disc-port": 8090,
+            "nat": "none",
+            "network": "logos.test"
           }
           EOF
           cat config.json
@@ -161,7 +187,11 @@ sections:
             "data-dir": "./storage-data",
             "log-level": "INFO",
             "log-file": "./storage-data/storage.log",
-            "nat": "none"
+            "listen-ip": "0.0.0.0",
+            "listen-port": 8091,
+            "disc-port": 8090,
+            "nat": "none",
+            "network": "logos.test"
           }
         check_file: "config.json"
       - title: "Watch for the start event"
@@ -172,12 +202,12 @@ sections:
         run: "./bin/logoscore call storage_module init @config.json"
         code_block: "logoscore call storage_module init @config.json"
         expect_contains:
-          - "true"
+          - '"result":true'
       - title: "start"
         run: "./bin/logoscore call storage_module start"
         code_block: "logoscore call storage_module start"
         expect_contains:
-          - "true"
+          - '"result":true'
       - title: "Confirm the start event arrived"
         run: |
           sleep 5
@@ -346,7 +376,9 @@ sections:
                 /// Empty until one arrives.
                 std::string lastUploadEvent();
 
-                /// Round-trips a call into storage_module and returns what it said.
+                /// Round-trips a call into storage_module. Returns a
+                /// self-describing string so the doc-test can assert the call
+                /// actually succeeded rather than that something was printed.
                 std::string targetVersion();
 
             private:
@@ -378,7 +410,9 @@ sections:
 
             std::string ProbeStorageImpl::targetVersion()
             {
-                return modules().storage_module.moduleVersion();
+                const std::string version = modules().storage_module.moduleVersion();
+                return version.empty() ? "probe-call-failed: empty version"
+                                       : "probe-call-ok version=" + version;
             }
 
       - title: "Build it as a portable package"
@@ -420,12 +454,15 @@ sections:
         run: "./bin/logoscore call probe_storage targetVersion"
         code_block: "logoscore call probe_storage targetVersion"
         expect_contains:
-          - "Result:"
+          - '"result":"probe-call-ok'
       - title: "Subscribe to the event"
         run: "./bin/logoscore call probe_storage subscribe"
         code_block: "logoscore call probe_storage subscribe"
         expect_contains:
-          - "ok"
+          # The value, not the envelope: logoscore wraps every successful call
+          # in {"status":"ok",...}, so asserting a bare "ok" would pass even
+          # when the subscription failed to register.
+          - '"result":"ok"'
       - title: "Trigger an upload"
         text: |
           Uploading a file makes `storage_module` emit `storageUploadDone`. The

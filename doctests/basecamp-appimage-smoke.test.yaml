@@ -113,8 +113,15 @@ sections:
       boot, load its plugins, and settle.
     steps:
       - title: "Launch"
+        text: |
+          Launched through its real path rather than the `./bin` symlink:
+          Basecamp locates its embedded modules and plugins relative to its own
+          executable, and on macOS that resolution follows the invocation path,
+          so a symlinked launch would look for them beside the symlink.
         run: |
-          QT_QPA_PLATFORM=offscreen ./bin/LogosBasecamp --user-dir ./testdata \
+          APP="$("$RELEASE_SET_DIR/doctests/release-set.sh" path LogosBasecamp)"
+          echo "launching $APP"
+          QT_QPA_PLATFORM=offscreen "$APP" --user-dir ./testdata \
             > basecamp.log 2>&1 &
           echo $! > basecamp.pid
           sleep 45

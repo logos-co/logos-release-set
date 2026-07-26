@@ -153,27 +153,51 @@ sections:
               timeout: 60000
               screenshot: "basecamp-settings.png"
 
-            - name: "Open the UI Modules tab"
+            # Settings opens on Dashboard. Without this click the Modules panes
+            # are never shown, their refresh never fires, and the tab clicks
+            # below would land on nothing.
+            - name: "Open Settings → Modules"
               action: click
-              target: "UI Modules"
+              target: "Modules"
 
-            - name: "The installed UI plugins are listed"
+            - name: "The UI Modules tab loads"
               action: wait_for
               texts: ["UI Modules", "Available UI plugins in the system"]
               timeout: 60000
               text: "The UI plugins installed from the catalog appear in **Settings → Modules → UI Modules**."
               screenshot: "basecamp-ui-modules.png"
 
+            # The assertion that actually ties this test to the release set.
+            # Module rows render `displayName || name`, so these are the
+            # display_name values of the pinned UI packages — storage_ui
+            # ("Storage"), chat_ui ("Chat"), blockchain_ui ("Blockchain") and
+            # lez_wallet_ui ("LEZ Wallet"). Asserting only Basecamp's own
+            # chrome would pass against an empty user directory.
+            - name: "The release set's UI apps are listed"
+              action: wait_for
+              texts: ["Storage", "Chat", "Blockchain", "LEZ Wallet"]
+              timeout: 60000
+              text: "Each UI app this release set pins appears as a row — installed from the catalog, loaded by the app."
+              screenshot: "basecamp-ui-modules-list.png"
+
             - name: "Open the Core Modules tab"
               action: click
               target: "Core Modules"
 
-            - name: "The installed core modules are listed"
+            - name: "The Core Modules tab loads"
               action: wait_for
               texts: ["Core Modules", "All available plugins in the system"]
               timeout: 60000
               text: "And the core modules the release set pins appear alongside them."
               screenshot: "basecamp-core-modules.png"
+
+            # Same again for the core modules, by display_name.
+            - name: "The release set's core modules are listed"
+              action: wait_for
+              texts: ["Storage Module", "Chat Module", "Blockchain Module"]
+              timeout: 60000
+              text: "The core modules are present too, so the dependencies the UI apps need are really loaded."
+              screenshot: "basecamp-core-modules-list.png"
         post_text: |
           Every element asserted above rendered from a user directory built
           entirely out of this release set: the modules and UI plugins came from

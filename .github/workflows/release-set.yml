@@ -134,16 +134,25 @@ jobs:
           RELEASE_SET_DIR: ${{ github.workspace }}
           RELEASE_SET_LOCK: ${{ github.workspace }}/release-set.lock.json
           GITHUB_TOKEN: ${{ github.token }}
+          # Via env, never interpolated into the shell: a workflow input is
+          # attacker-influenced text and `${{ }}` substitution happens before
+          # the shell ever sees it.
+          SPECS_INPUT: ${{ inputs.specs }}
+          SELECTED: ${{ steps.select.outputs.specs }}
         run: |
           mkdir -p "${{ runner.temp }}/reports"
-          specs="${{ inputs.specs }}"
-          if [ -n "$specs" ]; then
+          if [ -n "$SPECS_INPUT" ]; then
             selected=""
-            for name in $specs; do selected="$selected doctests/${name%.test.yaml}.test.yaml"; done
+            for name in $SPECS_INPUT; do
+              selected="$selected doctests/${name%.test.yaml}.test.yaml"
+            done
           else
-            selected="${{ steps.select.outputs.specs }}"
+            selected="$SELECTED"
           fi
           echo "Running:$selected"
+          # Record what actually ran, so the results cannot claim a spec passed
+          # that the override never executed.
+          echo "ran=$selected" >> "$GITHUB_OUTPUT"
           nix run github:logos-co/logos-doctest -- run \
             $selected \
             --verbose \
@@ -155,15 +164,19 @@ jobs:
         env:
           OUTCOME: ${{ steps.run.outcome }}
           SKIPPED: ${{ steps.select.outputs.skipped }}
-          SPECS: ${{ steps.select.outputs.specs }}
+          # What the run step actually executed — not what selection proposed,
+          # which diverges whenever the `specs` input overrides it.
+          SPECS: ${{ steps.run.outputs.ran }}
+          PLATFORM: ${{ matrix.platform }}
+          RUNNER_LABEL: ${{ matrix.runner }}
+          # Must match where the publish job arranges the reports for gh-pages.
+          PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.run_id }}
         run: |
           python3 - <<'PY'
           import json, os
-          platform = "${{ matrix.platform }}"
-          runner   = "${{ matrix.runner }}"
-          base     = ("https://${{ github.repository_owner }}.github.io/"
-                      "${{ github.event.repository.name }}/"
-                      "${{ github.run_id }}/" + platform + "/")
+          platform = os.environ["PLATFORM"]
+          runner   = os.environ["RUNNER_LABEL"]
+          base     = os.environ["PAGES_BASE"].rstrip("/") + "/" + platform + "/"
 
           # The runner produces one combined report per platform; every spec that
           # ran on this platform links to it.
@@ -171,7 +184,7 @@ jobs:
                     "skipped": "skipped", "": "skipped"}.get(os.environ["OUTCOME"], "failed")
 
           results = []
-          for spec in os.environ["SPECS"].split():
+          for spec in os.environ.get("SPECS", "").split():
               name = spec.split("/")[-1].removesuffix(".test.yaml")
               results.append({"spec": name, "platform": platform, "runner": runner,
                               "status": status, "reportUrl": base})
@@ -213,11 +226,31 @@ jobs:
         with:
           path: artifacts
 
+      # The results recorded each report at <run_id>/<platform>/. Publishing
+      # ./artifacts verbatim would put them at <run_id>/reports-<platform>/
+      # instead and every report link in the release description would 404, so
+      # lay the site out to match the URLs that were recorded.
+      - name: Arrange the reports for publishing
+        id: site
+        run: |
+          found=""
+          for dir in artifacts/reports-*; do
+            [ -f "$dir/index.html" ] || continue
+            platform="${dir#artifacts/reports-}"
+            mkdir -p "site/$platform"
+            cp "$dir/index.html" "site/$platform/index.html"
+            found="$found $platform"
+          done
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+          echo "Publishing reports for:$found"
+          find site -type f | sort
+
       - name: Publish the doc-test reports
+        if: steps.site.outputs.found != ''
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./artifacts
+          publish_dir: ./site
           destination_dir: ${{ github.run_id }}
           keep_files: true
           commit_message: "Release-set reports for ${{ needs.resolve.outputs.version }} (${{ github.sha }})"
@@ -238,9 +271,9 @@ jobs:
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           reports=""
-          for dir in artifacts/reports-*; do
+          for dir in site/*; do
             [ -f "$dir/index.html" ] || continue
-            platform="${dir#artifacts/reports-}"
+            platform="$(basename "$dir")"
             cp "$dir/index.html" "report-$platform.html"
             reports="$reports report-$platform.html"
           done
