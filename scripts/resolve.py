@@ -478,7 +478,9 @@ def platform_coverage(lock):
             covered = set(item.get("platforms") or [])
             for platform in PLATFORMS:
                 if platform not in covered:
-                    label = item.get("tag") or item.get("version")
+                    # Identify by the field that IS the pin for this group; a
+                    # catalog entry's `tag` is its source repo's tag, not its pin.
+                    label = item["tag"] if group in ("apps", "devUtils") else item["version"]
                     gaps.append({
                         "component": item["name"],
                         "version": label,

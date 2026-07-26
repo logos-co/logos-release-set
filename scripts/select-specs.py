@@ -31,11 +31,16 @@ BUILDER = ["logos-module-builder"]
 #               flake refs and publish no per-platform binaries), but recorded
 #               so each artifact can point at the doc-tests that covered it.
 SPECS = {
-    "headless-storage-module":    {"apps": TOOLS, "packages": ["storage_module"],
+    # Each headless spec also loads `openmetrics` and scrapes /metrics, so that
+    # package must publish this platform's variant too.
+    "headless-storage-module":    {"apps": TOOLS,
+                                   "packages": ["storage_module", "openmetrics"],
                                    "devUtils": BUILDER},
-    "headless-delivery-module":   {"apps": TOOLS, "packages": ["delivery_module"],
+    "headless-delivery-module":   {"apps": TOOLS,
+                                   "packages": ["delivery_module", "openmetrics"],
                                    "devUtils": BUILDER},
-    "headless-blockchain-module": {"apps": TOOLS, "packages": ["blockchain_module"],
+    "headless-blockchain-module": {"apps": TOOLS,
+                                   "packages": ["blockchain_module", "openmetrics"],
                                    "devUtils": BUILDER},
     # Launches the shipped Basecamp artifact, so that artifact must exist.
     "basecamp-appimage-smoke":    {"apps": PM_TOOLS + ["logos-basecamp"],
@@ -74,6 +79,8 @@ def missing_for(spec, lock, entries, platform):
         if item is None:
             reasons.append(f"{name} is not in the release set")
         elif platform not in (item.get("platforms") or []):
+            # `apps` entries are pinned by tag; never fall back to a catalog
+            # entry's source-repo tag here.
             label = item.get("tag") or item.get("version")
             reasons.append(f"no {platform} artifact published for {name}@{label}")
 

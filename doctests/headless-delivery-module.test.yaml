@@ -19,6 +19,10 @@ intro: |
   That makes the event assertion deterministic: it does not depend on the node
   finding peers.
 
+  Finally the pinned **`openmetrics`** module is loaded and `/metrics` scraped
+  over HTTP. `delivery_module` is the rendered-text kind of metrics source, so
+  this also exercises the scraper's parse-and-merge path.
+
 what_you_build: "The pinned `delivery_module`, installed from the catalog, started headlessly, and observed through a purpose-built probe module."
 
 what_you_learn:
@@ -27,6 +31,7 @@ what_you_learn:
   - How to create and start a delivery node headlessly, following the node operator guide
   - How to subscribe to a dependency's typed events from another module
   - Why a probe subscribes before the lifecycle call that fires the event
+  - 'Which module serves `/metrics`, and how `"format": "text"` picks the collection convention'
 
 prerequisites:
   - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
@@ -87,6 +92,19 @@ sections:
         code_block: |
           lgpd download delivery_module --version <pinned> -o packages
           lgpm --modules-dir ./modules install --file packages/delivery_module-*.lgx
+        expect_contains:
+          - "sha256 OK"
+          - "Installed to:"
+      - title: "Install the metrics scraper too"
+        text: |
+          `openmetrics` serves the `/metrics` endpoint later in this doc-test. It
+          is installed now, before the daemon starts, because the runtime scans
+          its module directories once at startup — anything installed afterwards
+          is invisible to it.
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" install openmetrics'
+        code_block: |
+          lgpd download openmetrics --version <pinned> -o packages
+          lgpm --modules-dir ./modules install --file packages/openmetrics-*.lgx
         expect_contains:
           - "sha256 OK"
           - "Installed to:"
@@ -409,6 +427,63 @@ sections:
           That event was emitted by the pinned `delivery_module` as its node
           finished starting, delivered over the runtime's event channel, and
           captured by a module built with the pinned `logos-module-builder`.
+
+  - title: "Expose the metrics endpoint"
+    step: true
+    text: |
+      `/metrics` is served by the **`openmetrics`** module itself: it runs an HTTP
+      server (libmicrohttpd) and, on every scrape, calls the metrics convention
+      method on each module named in its config, merging the results into one
+      OpenMetrics document with a `module="<name>"` label injected per series.
+
+      `delivery_module` is the *other* kind of source: it already speaks
+      OpenMetrics and returns a rendered document from
+      `collectOpenMetricsText()`, which the scraper parses back and merges. That
+      convention is selected per module with `"format": "text"` — naming it as a
+      bare string would call the structured `collectMetrics()` it does not
+      implement.
+    steps:
+      - title: "Load the scraper"
+        run: "./bin/logoscore load-module openmetrics"
+        code_block: "logoscore load-module openmetrics"
+        expect_contains:
+          - "openmetrics"
+      - title: "Point it at the delivery module"
+        file:
+          path: openmetrics.json
+          language: json
+          content: |
+            {
+              "port": 9465,
+              "modules": [
+                { "name": "delivery_module", "format": "text" }
+              ]
+            }
+      - title: "Start the server"
+        run: "./bin/logoscore call openmetrics start @openmetrics.json"
+        code_block: "logoscore call openmetrics start @openmetrics.json"
+        expect_contains:
+          - '"result":1'
+      - title: "Confirm it is serving"
+        run: "./bin/logoscore call openmetrics getInfo"
+        code_block: "logoscore call openmetrics getInfo"
+        expect_contains:
+          - '\"running\":true'
+      - title: "Scrape /metrics"
+        text: |
+          One HTTP request drives a live collection call into `delivery_module`
+          from the server thread; the text it returns is parsed and re-rendered
+          with a `module="delivery_module"` label on every series.
+        run: "curl -s --max-time 30 http://127.0.0.1:9465/metrics"
+        code_block: "curl http://127.0.0.1:9465/metrics"
+        expect_contains:
+          - 'module="delivery_module"'
+          - "# EOF"
+      - title: "Stop the server"
+        run: "./bin/logoscore call openmetrics stop"
+        code_block: "logoscore call openmetrics stop"
+        expect_contains:
+          - '"result":1'
 
   - title: "Shut down"
     step: true

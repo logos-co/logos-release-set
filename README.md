@@ -85,7 +85,7 @@ pinned versions and checksum-verified on the way in.
 
 | Spec | What it proves |
 |---|---|
-| `headless-storage-module` | Installs, initializes and drives the pinned storage node; a probe module calls it and catches its events |
+| `headless-storage-module` | Installs, initializes and drives the pinned storage node; a probe module calls it and catches its events; `/metrics` is scraped |
 | `headless-delivery-module` | Same for delivery, subscribing before start so `nodeStarted` is deterministic |
 | `headless-blockchain-module` | Same for blockchain, joined to the testnet with the operator guide's peer set |
 | `basecamp-appimage-smoke` | The **shipped** Basecamp artifact boots on a user-dir full of pinned modules and stays clean |
@@ -103,6 +103,21 @@ events from inside the runtime. The probe supplies its own contract via
 `dependency_overrides`, so it compiles against the interface without building
 the target from source — what it talks to at runtime is the downloaded `.lgx`
 and nothing else.
+
+Each headless spec then loads the pinned **`openmetrics`** module and scrapes
+`/metrics` over HTTP. `openmetrics` is the module that serves the endpoint: it
+runs its own HTTP server and, per scrape, calls a metrics convention method on
+each configured module over IPC, merging the results into one document with a
+`module="<name>"` label per series. A module opts in by implementing either
+`collectMetrics()` (structured — `storage_module`) or `collectOpenMetricsText()`
+(already rendered, selected with `"format": "text"` — `delivery_module`).
+`blockchain_module` implements neither, so there the probe carries the metric
+and publishes the block count it observed.
+
+**Everything is installed before the daemon starts.** The runtime scans its
+module directories once, at startup, and there is no rescan command — a package
+installed while it is running is invisible, and `load-module` fails with
+`MODULE_LOAD_FAILED`.
 
 Everything is the **portable** variant, end to end. A dev build RPATHs into
 `/nix/store` and will not load beside portable catalog packages, so probes build

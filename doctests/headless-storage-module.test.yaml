@@ -15,12 +15,15 @@ intro: |
   [Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide),
   adjusted for a CI host with no public IP.
 
-  Then it goes one step further than "the module loads": it builds a small
+  Then it goes two steps further than "the module loads". It builds a small
   **probe module** with the `logos-module-builder` release the set pins, and
   uses that probe to call `storage_module` and subscribe to one of its events
-  from inside the runtime. A green run means the pinned storage module is
-  installable, loadable, callable, and actually emits the events other modules
-  depend on.
+  from inside the runtime. Finally it loads the pinned **`openmetrics`** module
+  and scrapes `/metrics` over HTTP, proving the storage module's metrics reach
+  a real endpoint.
+
+  A green run means the pinned storage module is installable, loadable,
+  callable, emits the events other modules depend on, and reports metrics.
 
 what_you_build: "The pinned `storage_module`, installed from the catalog and driven through a `logoscore` daemon and a purpose-built probe module."
 
@@ -30,6 +33,7 @@ what_you_learn:
   - How to initialize the storage node headlessly, following the node operator guide
   - How to observe a module's events with `logoscore watch`
   - How to build a probe module that calls a dependency and subscribes to its events
+  - Which module serves `/metrics`, and how it scrapes others over IPC
 
 prerequisites:
   - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
@@ -111,114 +115,25 @@ sections:
         expect_contains:
           - "sha256 OK"
           - "Installed to:"
+      - title: "Install the metrics scraper too"
+        text: |
+          `openmetrics` is the module that serves the `/metrics` endpoint later
+          in this doc-test. It is installed now, before the daemon starts,
+          because the runtime scans its module directories once at startup —
+          anything installed afterwards is invisible to it.
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" install openmetrics'
+        code_block: |
+          lgpd download openmetrics --version <pinned> -o packages
+          lgpm --modules-dir ./modules install --file packages/openmetrics-*.lgx
+        expect_contains:
+          - "sha256 OK"
+          - "Installed to:"
       - title: "Confirm what landed"
         run: "./bin/lgpm --modules-dir ./modules list"
         code_block: "lgpm --modules-dir ./modules list"
         expect_contains:
           - "storage_module"
-
-  - title: "Start the runtime and load the module"
-    step: true
-    text: |
-      `logoscore -D` starts the daemon in the background; the client subcommands
-      then talk to it over the control socket configured under `~/.logoscore/`.
-    steps:
-      - title: "Start the daemon"
-        run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
-        code_block: "logoscore -D -m ./modules > logs.txt &"
-      - title: "Wait for it to come up"
-        text: |
-          The daemon loads `capability_module` before it publishes its client
-          config, so it is answerable a few seconds after launch — longer on a
-          loaded runner. Poll rather than guess at a sleep.
-        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" wait-daemon 90'
-        code_block: "logoscore status"
-        expect_contains:
-          - '"status":"running"'
-      - title: "List what the daemon discovered"
-        run: "./bin/logoscore list-modules"
-        code_block: "logoscore list-modules"
-        expect_contains:
-          - "storage_module"
-      - title: "Load it"
-        run: "./bin/logoscore load-module storage_module"
-        code_block: "logoscore load-module storage_module"
-        expect_contains:
-          - "storage_module"
-      - title: "Confirm it is loaded"
-        run: "./bin/logoscore status"
-        code_block: "logoscore status"
-        expect_contains:
-          - "storage_module"
-          - '"status":"loaded"'
-
-  - title: "Initialize the node"
-    step: true
-    text: |
-      This is the node operator guide's storage step. Its config is reproduced
-      key for key — `data-dir`, `log-level`, `listen-ip`, `listen-port`,
-      `disc-port` and `network: "logos.test"`, the key that selects the testnet
-      — with exactly one deliberate change: the guide sets
-      `"nat": "extip:<public-ip>"`, which a CI runner (no public IP, no inbound
-      ports) cannot satisfy, so we use `"nat": "none"`. The one addition is
-      `log-file`, so the node's log lands somewhere the doc-test can show you.
-
-      `init` is synchronous; `start` completes asynchronously and announces
-      itself with a `storageStart` event, so we begin watching before calling it.
-    steps:
-      - title: "Write the node config"
-        run: |
-          mkdir -p storage-data
-          cat > config.json <<EOF
-          {
-            "data-dir": "$(pwd)/storage-data",
-            "log-level": "INFO",
-            "log-file": "$(pwd)/storage-data/storage.log",
-            "listen-ip": "0.0.0.0",
-            "listen-port": 8091,
-            "disc-port": 8090,
-            "nat": "none",
-            "network": "logos.test"
-          }
-          EOF
-          cat config.json
-        code_block: |
-          {
-            "data-dir": "./storage-data",
-            "log-level": "INFO",
-            "log-file": "./storage-data/storage.log",
-            "listen-ip": "0.0.0.0",
-            "listen-port": 8091,
-            "disc-port": 8090,
-            "nat": "none",
-            "network": "logos.test"
-          }
-        check_file: "config.json"
-      - title: "Watch for the start event"
-        run: "sh -c './bin/logoscore watch storage_module --event storageStart --json > start-event.txt 2>&1 & echo $! > watch.pid'"
-        code_block: "logoscore watch storage_module --event storageStart --json"
-      - run: "sleep 2"
-      - title: "init"
-        run: "./bin/logoscore call storage_module init @config.json"
-        code_block: "logoscore call storage_module init @config.json"
-        expect_contains:
-          - '"result":true'
-      - title: "start"
-        run: "./bin/logoscore call storage_module start"
-        code_block: "logoscore call storage_module start"
-        expect_contains:
-          - '"result":true'
-      - title: "Confirm the start event arrived"
-        run: |
-          sleep 5
-          kill "$(cat watch.pid)" 2>/dev/null || true
-          cat start-event.txt
-        code_block: "cat start-event.txt"
-        expect_contains:
-          - "storageStart"
-        post_text: |
-          The node is up and announcing it. Everything from here on is a real
-          round-trip into the pinned `.lgx`.
+          - "openmetrics"
 
   - title: "Build a probe module with the pinned module-builder"
     step: true
@@ -437,6 +352,109 @@ sections:
         expect_contains:
           - "Installed to:"
 
+  - title: "Start the runtime and load the module"
+    step: true
+    text: |
+      `logoscore -D` starts the daemon in the background; the client subcommands
+      then talk to it over the control socket configured under `~/.logoscore/`.
+    steps:
+      - title: "Start the daemon"
+        run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
+        code_block: "logoscore -D -m ./modules > logs.txt &"
+      - title: "Wait for it to come up"
+        text: |
+          The daemon loads `capability_module` before it publishes its client
+          config, so it is answerable a few seconds after launch — longer on a
+          loaded runner. Poll rather than guess at a sleep.
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" wait-daemon 90'
+        code_block: "logoscore status"
+        expect_contains:
+          - '"status":"running"'
+      - title: "List what the daemon discovered"
+        run: "./bin/logoscore list-modules"
+        code_block: "logoscore list-modules"
+        expect_contains:
+          - "storage_module"
+      - title: "Load it"
+        run: "./bin/logoscore load-module storage_module"
+        code_block: "logoscore load-module storage_module"
+        expect_contains:
+          - "storage_module"
+      - title: "Confirm it is loaded"
+        run: "./bin/logoscore status"
+        code_block: "logoscore status"
+        expect_contains:
+          - "storage_module"
+          - '"status":"loaded"'
+
+  - title: "Initialize the node"
+    step: true
+    text: |
+      This is the node operator guide's storage step. Its config is reproduced
+      key for key — `data-dir`, `log-level`, `listen-ip`, `listen-port`,
+      `disc-port` and `network: "logos.test"`, the key that selects the testnet
+      — with exactly one deliberate change: the guide sets
+      `"nat": "extip:<public-ip>"`, which a CI runner (no public IP, no inbound
+      ports) cannot satisfy, so we use `"nat": "none"`. The one addition is
+      `log-file`, so the node's log lands somewhere the doc-test can show you.
+
+      `init` is synchronous; `start` completes asynchronously and announces
+      itself with a `storageStart` event, so we begin watching before calling it.
+    steps:
+      - title: "Write the node config"
+        run: |
+          mkdir -p storage-data
+          cat > config.json <<EOF
+          {
+            "data-dir": "$(pwd)/storage-data",
+            "log-level": "INFO",
+            "log-file": "$(pwd)/storage-data/storage.log",
+            "listen-ip": "0.0.0.0",
+            "listen-port": 8091,
+            "disc-port": 8090,
+            "nat": "none",
+            "network": "logos.test"
+          }
+          EOF
+          cat config.json
+        code_block: |
+          {
+            "data-dir": "./storage-data",
+            "log-level": "INFO",
+            "log-file": "./storage-data/storage.log",
+            "listen-ip": "0.0.0.0",
+            "listen-port": 8091,
+            "disc-port": 8090,
+            "nat": "none",
+            "network": "logos.test"
+          }
+        check_file: "config.json"
+      - title: "Watch for the start event"
+        run: "sh -c './bin/logoscore watch storage_module --event storageStart --json > start-event.txt 2>&1 & echo $! > watch.pid'"
+        code_block: "logoscore watch storage_module --event storageStart --json"
+      - run: "sleep 2"
+      - title: "init"
+        run: "./bin/logoscore call storage_module init @config.json"
+        code_block: "logoscore call storage_module init @config.json"
+        expect_contains:
+          - '"result":true'
+      - title: "start"
+        run: "./bin/logoscore call storage_module start"
+        code_block: "logoscore call storage_module start"
+        expect_contains:
+          - '"result":true'
+      - title: "Confirm the start event arrived"
+        run: |
+          sleep 5
+          kill "$(cat watch.pid)" 2>/dev/null || true
+          cat start-event.txt
+        code_block: "cat start-event.txt"
+        expect_contains:
+          - "storageStart"
+        post_text: |
+          The node is up and announcing it. Everything from here on is a real
+          round-trip into the pinned `.lgx`.
+
   - title: "Drive storage_module through the probe"
     step: true
     text: |
@@ -484,6 +502,60 @@ sections:
           across the runtime's event channel, and captured by a module built with
           the pinned `logos-module-builder`. Calls and events both work in the set
           as pinned.
+
+  - title: "Expose the metrics endpoint"
+    step: true
+    text: |
+      `/metrics` is served by the **`openmetrics`** module itself: it runs an HTTP
+      server (libmicrohttpd) and, on every scrape, calls the metrics convention
+      method on each module named in its config, merging the results into one
+      OpenMetrics document with a `module="<name>"` label injected per series.
+
+      `storage_module` implements the structured `collectMetrics()` convention,
+      so it is named as a bare string. (A module that already renders
+      OpenMetrics text implements `collectOpenMetricsText()` instead and is named
+      as `{"name": "...", "format": "text"}`.)
+    steps:
+      - title: "Load the scraper"
+        run: "./bin/logoscore load-module openmetrics"
+        code_block: "logoscore load-module openmetrics"
+        expect_contains:
+          - "openmetrics"
+      - title: "Point it at the storage module"
+        file:
+          path: openmetrics.json
+          language: json
+          content: |
+            {
+              "port": 9464,
+              "modules": ["storage_module"]
+            }
+      - title: "Start the server"
+        run: "./bin/logoscore call openmetrics start @openmetrics.json"
+        code_block: "logoscore call openmetrics start @openmetrics.json"
+        expect_contains:
+          - '"result":1'
+      - title: "Confirm it is serving"
+        run: "./bin/logoscore call openmetrics getInfo"
+        code_block: "logoscore call openmetrics getInfo"
+        expect_contains:
+          - '\"running\":true'
+      - title: "Scrape /metrics"
+        text: |
+          One HTTP request drives a live collection call into `storage_module`
+          from the server thread. The `module="storage_module"` label is proof the
+          series came from the pinned module rather than from the scraper itself;
+          `# EOF` is the OpenMetrics document terminator.
+        run: "curl -s --max-time 30 http://127.0.0.1:9464/metrics"
+        code_block: "curl http://127.0.0.1:9464/metrics"
+        expect_contains:
+          - 'module="storage_module"'
+          - "# EOF"
+      - title: "Stop the server"
+        run: "./bin/logoscore call openmetrics stop"
+        code_block: "logoscore call openmetrics stop"
+        expect_contains:
+          - '"result":1'
 
   - title: "Shut down"
     step: true

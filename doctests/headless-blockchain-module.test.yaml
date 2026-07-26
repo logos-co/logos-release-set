@@ -16,7 +16,10 @@ intro: |
   participation both need a public IP and on-chain funds).
 
   A **probe module** built with the pinned `logos-module-builder` then calls the
-  module and subscribes to its `newBlock` event.
+  module and subscribes to its `newBlock` event. Finally the pinned
+  **`openmetrics`** module is loaded and `/metrics` scraped over HTTP —
+  `blockchain_module` implements neither metrics convention, so the probe
+  publishes the block count it observed and the scrape reads that.
 
   > **On `newBlock`:** it only fires once the node has synced blocks from
   > testnet peers, which depends on network conditions a CI run does not
@@ -32,6 +35,7 @@ what_you_learn:
   - How to generate a node config and start a blockchain node headlessly
   - How to query chain state with `get_cryptarchia_info`
   - How to subscribe to a dependency's events from another module
+  - Which module serves `/metrics`, and how a module becomes scrapeable
 
 prerequisites:
   - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
@@ -96,84 +100,24 @@ sections:
         expect_contains:
           - "sha256 OK"
           - "Installed to:"
+      - title: "Install the metrics scraper too"
+        text: |
+          `openmetrics` serves the `/metrics` endpoint later in this doc-test. It
+          is installed now, before the daemon starts, because the runtime scans
+          its module directories once at startup — anything installed afterwards
+          is invisible to it.
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" install openmetrics'
+        code_block: |
+          lgpd download openmetrics --version <pinned> -o packages
+          lgpm --modules-dir ./modules install --file packages/openmetrics-*.lgx
+        expect_contains:
+          - "sha256 OK"
+          - "Installed to:"
       - title: "Confirm the installed version"
         run: "./bin/lgpm --modules-dir ./modules info blockchain_module"
         code_block: "lgpm --modules-dir ./modules info blockchain_module"
         expect_contains:
           - "blockchain_module"
-
-  - title: "Start the runtime and load the module"
-    step: true
-    steps:
-      - title: "Start the daemon"
-        run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
-        code_block: "logoscore -D -m ./modules > logs.txt &"
-      - title: "Wait for it to come up"
-        text: |
-          The daemon loads `capability_module` before it publishes its client
-          config, so it is answerable a few seconds after launch — longer on a
-          loaded runner. Poll rather than guess at a sleep.
-        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" wait-daemon 90'
-        code_block: "logoscore status"
-        expect_contains:
-          - '"status":"running"'
-      - title: "Load blockchain_module"
-        run: "./bin/logoscore load-module blockchain_module"
-        code_block: "logoscore load-module blockchain_module"
-        expect_contains:
-          - "blockchain_module"
-      - title: "Confirm it is loaded"
-        run: "./bin/logoscore status"
-        code_block: "logoscore status"
-        expect_contains:
-          - "blockchain_module"
-          - '"status":"loaded"'
-
-  - title: "Initialize the node"
-    step: true
-    text: |
-      The node operator guide's blockchain step. `generate_user_config` takes the
-      testnet's initial peers and writes `user_config.yaml` into the **daemon's**
-      working directory; `start` then takes that path plus an empty second
-      argument (no deployment file is needed any more).
-    steps:
-      - title: "Write the testnet peer set"
-        text: "The initial peers from the node operator guide, verbatim."
-        file:
-          path: peers.json
-          language: json
-          content: |
-            {
-              "initial_peers": [
-                "/ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWFrouXfmrR4nsLMtE7wu15DoMJ6VtoUtHinREZCvbWHar",
-                "/ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWJRGau8M1rjT7R5e4YYsgdFhsMX35nRDtMwCDjxQkXAHz",
-                "/ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWQXJavMDTRscjauFSgVAB1VLB6Rzpy2uY5SU9Tk7927tb",
-                "/ip4/65.109.51.37/udp/50001/quic-v1/p2p/12D3KooWSQc7CcGtvWDPF1yCbBthFnQjprfCVHmfmNDUrSmqQsU1"
-              ]
-            }
-      - title: "Generate the node config"
-        run: './bin/logoscore call blockchain_module generate_user_config "$(cat peers.json)"'
-        code_block: 'logoscore call blockchain_module generate_user_config "$(cat peers.json)"'
-        check_file: "user_config.yaml"
-      - title: "Start the node"
-        run: './bin/logoscore call blockchain_module start "$(pwd)/user_config.yaml" ""'
-        code_block: 'logoscore call blockchain_module start /path/to/user_config.yaml ""'
-        expect_contains:
-          # The success flag, not just the presence of a result envelope —
-          # a failed start also returns a "result", with success:false.
-          - '"success":true'
-      - run: "sleep 20"
-      - title: "Query chain state"
-        text: |
-          Called once, not polled: repeatedly polling `get_cryptarchia_info` has
-          been observed to abort the host process, so a single read is both
-          enough and safer.
-        run: "./bin/logoscore call blockchain_module get_cryptarchia_info"
-        code_block: "logoscore call blockchain_module get_cryptarchia_info | jq -r .result.value | jq ."
-        expect_contains:
-          # The success flag, not just the presence of a result envelope —
-          # a module that answers "success":false also prints a "result".
-          - '"success":true'
 
   - title: "Build a probe module with the pinned module-builder"
     step: true
@@ -299,10 +243,12 @@ sections:
             #pragma once
 
             #include <string>
+            #include <logos_json.h>            // LogosMap (nlohmann::json alias)
             #include "logos_module_context.h"
 
             /// Probes the blockchain_module pinned by the release set: one call
-            /// in, one event subscription out.
+            /// in, one event subscription out — and a metrics surface so the
+            /// openmetrics module has something to scrape.
             class ProbeBlockchainImpl : public LogosModuleContext
             {
             public:
@@ -314,6 +260,15 @@ sections:
 
                 /// Round-trips a call into blockchain_module and returns what it said.
                 std::string chainInfo();
+
+                /// The convention the openmetrics module scrapes:
+                /// {"metrics": [ {name, type, help, value, labels?}, ... ]}.
+                ///
+                /// blockchain_module implements neither metrics convention, so
+                /// there is nothing to scrape from it directly. The probe
+                /// publishes what it observed *from* it instead, which makes the
+                /// scrape a real end-to-end signal rather than an empty document.
+                LogosMap collectMetrics();
 
             private:
                 int64_t m_blocks = 0;
@@ -354,6 +309,20 @@ sections:
                                       : ("probe-call-failed " + result.error);
             }
 
+            LogosMap ProbeBlockchainImpl::collectMetrics()
+            {
+                LogosMap blocks;
+                blocks["name"]  = "probe_blocks_observed_total";
+                blocks["type"]  = "counter";
+                blocks["help"]  = "newBlock events received from blockchain_module";
+                blocks["value"] = m_blocks;
+
+                LogosMap payload;
+                payload["metrics"] = LogosMap::array();
+                payload["metrics"].push_back(blocks);
+                return payload;
+            }
+
       - title: "Build it as a portable package"
         text: |
           `#lgx-portable`, not `#lgx`. The host is a released (portable) AppImage
@@ -375,6 +344,79 @@ sections:
         code_block: "lgpm --modules-dir ./modules --allow-unsigned install --file probe/probe-lgx/*.lgx"
         expect_contains:
           - "Installed to:"
+
+  - title: "Start the runtime and load the module"
+    step: true
+    steps:
+      - title: "Start the daemon"
+        run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
+        code_block: "logoscore -D -m ./modules > logs.txt &"
+      - title: "Wait for it to come up"
+        text: |
+          The daemon loads `capability_module` before it publishes its client
+          config, so it is answerable a few seconds after launch — longer on a
+          loaded runner. Poll rather than guess at a sleep.
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" wait-daemon 90'
+        code_block: "logoscore status"
+        expect_contains:
+          - '"status":"running"'
+      - title: "Load blockchain_module"
+        run: "./bin/logoscore load-module blockchain_module"
+        code_block: "logoscore load-module blockchain_module"
+        expect_contains:
+          - "blockchain_module"
+      - title: "Confirm it is loaded"
+        run: "./bin/logoscore status"
+        code_block: "logoscore status"
+        expect_contains:
+          - "blockchain_module"
+          - '"status":"loaded"'
+
+  - title: "Initialize the node"
+    step: true
+    text: |
+      The node operator guide's blockchain step. `generate_user_config` takes the
+      testnet's initial peers and writes `user_config.yaml` into the **daemon's**
+      working directory; `start` then takes that path plus an empty second
+      argument (no deployment file is needed any more).
+    steps:
+      - title: "Write the testnet peer set"
+        text: "The initial peers from the node operator guide, verbatim."
+        file:
+          path: peers.json
+          language: json
+          content: |
+            {
+              "initial_peers": [
+                "/ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWFrouXfmrR4nsLMtE7wu15DoMJ6VtoUtHinREZCvbWHar",
+                "/ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWJRGau8M1rjT7R5e4YYsgdFhsMX35nRDtMwCDjxQkXAHz",
+                "/ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWQXJavMDTRscjauFSgVAB1VLB6Rzpy2uY5SU9Tk7927tb",
+                "/ip4/65.109.51.37/udp/50001/quic-v1/p2p/12D3KooWSQc7CcGtvWDPF1yCbBthFnQjprfCVHmfmNDUrSmqQsU1"
+              ]
+            }
+      - title: "Generate the node config"
+        run: './bin/logoscore call blockchain_module generate_user_config "$(cat peers.json)"'
+        code_block: 'logoscore call blockchain_module generate_user_config "$(cat peers.json)"'
+        check_file: "user_config.yaml"
+      - title: "Start the node"
+        run: './bin/logoscore call blockchain_module start "$(pwd)/user_config.yaml" ""'
+        code_block: 'logoscore call blockchain_module start /path/to/user_config.yaml ""'
+        expect_contains:
+          # The success flag, not just the presence of a result envelope —
+          # a failed start also returns a "result", with success:false.
+          - '"success":true'
+      - run: "sleep 20"
+      - title: "Query chain state"
+        text: |
+          Called once, not polled: repeatedly polling `get_cryptarchia_info` has
+          been observed to abort the host process, so a single read is both
+          enough and safer.
+        run: "./bin/logoscore call blockchain_module get_cryptarchia_info"
+        code_block: "logoscore call blockchain_module get_cryptarchia_info | jq -r .result.value | jq ."
+        expect_contains:
+          # The success flag, not just the presence of a result envelope —
+          # a module that answers "success":false also prints a "result".
+          - '"success":true'
 
   - title: "Drive blockchain_module through the probe"
     step: true
@@ -409,6 +451,64 @@ sections:
           failure. A non-zero is positive proof the event path works end to end.
         run: "./bin/logoscore call probe_blockchain blockCount"
         code_block: "logoscore call probe_blockchain blockCount"
+
+  - title: "Expose the metrics endpoint"
+    step: true
+    text: |
+      `/metrics` is served by the **`openmetrics`** module itself: it runs an HTTP
+      server (libmicrohttpd) and, on every scrape, calls the metrics convention
+      method on each module named in its config, merging the results into one
+      OpenMetrics document with a `module="<name>"` label injected per series.
+
+      A module becomes scrapeable by implementing `collectMetrics()` (structured)
+      or `collectOpenMetricsText()` (already-rendered text). **`blockchain_module`
+      implements neither**, so there is nothing to scrape from it directly —
+      unlike `storage_module` and `delivery_module`, which implement one each.
+      The probe carries the metric instead, publishing the count of `newBlock`
+      events it received from `blockchain_module`. The scrape therefore still
+      proves the whole chain: the endpoint serves, the scraper reaches a module
+      over IPC from its HTTP thread, and the value it returns came from the
+      module under test.
+    steps:
+      - title: "Load the scraper"
+        run: "./bin/logoscore load-module openmetrics"
+        code_block: "logoscore load-module openmetrics"
+        expect_contains:
+          - "openmetrics"
+      - title: "Point it at the probe"
+        file:
+          path: openmetrics.json
+          language: json
+          content: |
+            {
+              "port": 9466,
+              "modules": ["probe_blockchain"]
+            }
+      - title: "Start the server"
+        run: "./bin/logoscore call openmetrics start @openmetrics.json"
+        code_block: "logoscore call openmetrics start @openmetrics.json"
+        expect_contains:
+          - '"result":1'
+      - title: "Confirm it is serving"
+        run: "./bin/logoscore call openmetrics getInfo"
+        code_block: "logoscore call openmetrics getInfo"
+        expect_contains:
+          - '\"running\":true'
+      - title: "Scrape /metrics"
+        text: |
+          One HTTP request drives a live collection call into the probe from the
+          server thread. A value of `0` is a legitimate result — it means no
+          block arrived inside the window — but the series itself must be there.
+        run: "curl -s --max-time 30 http://127.0.0.1:9466/metrics"
+        code_block: "curl http://127.0.0.1:9466/metrics"
+        expect_contains:
+          - 'probe_blocks_observed_total{module="probe_blockchain"}'
+          - "# EOF"
+      - title: "Stop the server"
+        run: "./bin/logoscore call openmetrics stop"
+        code_block: "logoscore call openmetrics stop"
+        expect_contains:
+          - '"result":1'
 
   - title: "Shut down"
     step: true

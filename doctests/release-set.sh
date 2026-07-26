@@ -87,9 +87,18 @@ cmd_pin() {
   python3 - "$LOCK" "$1" "$2" <<'PY'
 import json, sys
 lock, group, name = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+# Which field IS the pin depends on the group, and they are not
+# interchangeable: apps are pinned by release tag, catalog packages by version.
+# Catalog entries also carry the source repo's tag when it has one ("v2.0.1"
+# against version "2.0.1") — feeding that to `lgpd --version` asks for a
+# version that does not exist.
+key = "tag" if group in ("apps", "devUtils") else "version"
 for item in lock.get(group, []):
     if item["name"] == name:
-        print(item.get("tag") or item.get("version"))
+        value = item.get(key)
+        if not value:
+            sys.exit(f"{group}/{name} has no {key} in the lock")
+        print(value)
         break
 else:
     sys.exit(f"{group}/{name} is not in the release set")
