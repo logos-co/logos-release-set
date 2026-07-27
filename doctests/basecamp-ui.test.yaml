@@ -178,6 +178,18 @@ sections:
             # partial and case-insensitive, so asserting the stem holds either
             # way and does not break when a later release adds or drops a
             # display_name.
+            # Opening the tab kicks off an async refresh (getInstalledUiPlugins
+            # + getInstalledPackages + per-package dependency resolution) and
+            # the model is rebuilt when it lands. Asserting while the spinner is
+            # still up reads a half-populated list. Settle first, and capture
+            # the settled frame here rather than on the assertion step — a
+            # failing step captures nothing, so this is the screenshot that
+            # shows what the assertion actually saw.
+            - name: "Let the plugin list finish refreshing"
+              action: sleep
+              ms: 10000
+              screenshot: "basecamp-ui-modules-settled.png"
+
             - name: "The release set's UI apps are listed"
               action: wait_for
               texts: ["Storage", "Chat", "Blockchain", "LEZ"]
@@ -201,9 +213,16 @@ sections:
             # ships no display_name at this pin and renders "blockchain_module",
             # so asserting "Blockchain Module" fails on a module that is present
             # and loaded.
+            # Switching tabs triggers refreshCoreModules(); settle before
+            # asserting, for the same reason as the UI Modules tab above.
+            - name: "Let the core module list finish refreshing"
+              action: sleep
+              ms: 10000
+              screenshot: "basecamp-core-modules-settled.png"
+
             - name: "The release set's core modules are listed"
               action: wait_for
-              texts: ["Storage", "Chat", "Blockchain"]
+              texts: ["Storage", "Chat", "Blockchain", "LEZ"]
               timeout: 60000
               text: "The core modules are present too, so the dependencies the UI apps need are really loaded."
               screenshot: "basecamp-core-modules-list.png"
