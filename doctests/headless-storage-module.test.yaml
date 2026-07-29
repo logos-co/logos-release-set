@@ -7,7 +7,7 @@ intro: |
   [`release-set.json`](../release-set.json) — not the latest `master`, not a
   local build: **exactly the artifacts a user would install**.
 
-  Everything runs from released binaries. `logosctl`, `lgpd` and `lgpm` are
+  Everything runs from released binaries. `logoscore`, `lgpd` and `lgpm` are
   downloaded from their GitHub releases at the tags the release set pins;
   `storage_module` is pulled from the module catalog with `lgpd` at the pinned
   version and installed with `lgpm`, checksum-verified against the catalog
@@ -25,13 +25,13 @@ intro: |
   A green run means the pinned storage module is installable, loadable,
   callable, emits the events other modules depend on, and reports metrics.
 
-what_you_build: "The pinned `storage_module`, installed from the catalog and driven through a `logosctl` daemon and a purpose-built probe module."
+what_you_build: "The pinned `storage_module`, installed from the catalog and driven through a `logoscore` daemon and a purpose-built probe module."
 
 what_you_learn:
   - How a release set pins tools by release tag and modules by catalog version
   - How to install an exact module version with `lgpd download --version` + `lgpm`
   - How to initialize the storage node headlessly, following the node operator guide
-  - How to observe a module's events with `logosctl watch`
+  - How to observe a module's events with `logoscore watch`
   - How to build a probe module that calls a dependency and subscribes to its events
   - Which module serves `/metrics`, and how it scrapes others over IPC
 
@@ -63,15 +63,15 @@ sections:
   - title: "Fetch the pinned tools"
     step: true
     text: |
-      `logosctl` (the headless module runtime), `lgpd` (catalog downloader) and
+      `logoscore` (the headless module runtime), `lgpd` (catalog downloader) and
       `lgpm` (package installer) are downloaded at the tags the release set pins.
       On Linux they ship as AppImages, which we extract rather than mount — CI
       runners have no FUSE. On macOS they ship as directory bundles.
     steps:
-      - title: "Fetch logosctl"
-        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logosctl logoscore'
-        code_block: "./doctests/release-set.sh fetch logos-logoscore-cli logosctl logoscore"
-        check_file: "bin/logosctl"
+      - title: "Fetch logoscore"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logoscore'
+        code_block: "./doctests/release-set.sh fetch logos-logoscore-cli logoscore"
+        check_file: "bin/logoscore"
       - title: "Fetch lgpd and lgpm"
         run: |
           "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-downloader lgpd
@@ -81,19 +81,19 @@ sections:
           ./doctests/release-set.sh fetch logos-package-manager lgpm
         check_file: "bin/lgpm"
       - title: "Confirm the versions"
-        run: "./bin/logosctl --version && ./bin/lgpm --help | head -3"
-        code_block: "logosctl --version"
+        run: "./bin/logoscore --version && ./bin/lgpm --help | head -3"
+        code_block: "logoscore --version"
       - title: "Seed the runtime's own modules"
         text: |
-          `logosctl` ships `capability_module` — the auth handshake every
+          `logoscore` ships `capability_module` — the auth handshake every
           `load-module` needs — inside its bundle, and finds it relative to its
-          own executable. We run it through `./bin/logosctl`, and on macOS that
+          own executable. We run it through `./bin/logoscore`, and on macOS that
           lookup follows the *symlink* path rather than the bundle, so the module
           would never be found and every load would stall then fail. Copying the
           bundled modules into the directory we hand to `-m` removes the
           dependency on that resolution entirely.
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" seed-modules logos-logoscore-cli'
-        code_block: "cp -RL <logosctl-bundle>/modules/. ./modules/"
+        code_block: "cp -RL <logoscore-bundle>/modules/. ./modules/"
         check_file: "modules/capability_module"
 
   - title: "Install the pinned storage_module"
@@ -355,34 +355,34 @@ sections:
   - title: "Start the runtime and load the module"
     step: true
     text: |
-      `logosctl -D` starts the daemon in the background; the client subcommands
-      then talk to it over the control socket configured under `~/.logosctl/`.
+      `logoscore -D` starts the daemon in the background; the client subcommands
+      then talk to it over the control socket configured under `~/.logoscore/`.
     steps:
       - title: "Start the daemon"
-        run: "./bin/logosctl --config-dir . daemon start --detach"
-        code_block: "logosctl --config-dir . daemon start --detach"
+        run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
+        code_block: "logoscore -D -m ./modules > logs.txt &"
       - title: "Wait for it to come up"
         text: |
           The daemon loads `capability_module` before it publishes its client
           config, so it is answerable a few seconds after launch — longer on a
           loaded runner. Poll rather than guess at a sleep.
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" wait-daemon 90'
-        code_block: "logosctl daemon status"
+        code_block: "logoscore status"
         expect_contains:
           - '"status":"running"'
       - title: "List what the daemon discovered"
-        run: "./bin/logosctl module ls"
-        code_block: "logosctl module ls"
+        run: "./bin/logoscore list-modules"
+        code_block: "logoscore list-modules"
         expect_contains:
           - "storage_module"
       - title: "Load it"
-        run: "./bin/logosctl module load storage_module"
-        code_block: "logosctl module load storage_module"
+        run: "./bin/logoscore load-module storage_module"
+        code_block: "logoscore load-module storage_module"
         expect_contains:
           - "storage_module"
       - title: "Confirm it is loaded"
-        run: "./bin/logosctl daemon status"
-        code_block: "logosctl daemon status"
+        run: "./bin/logoscore status"
+        code_block: "logoscore status"
         expect_contains:
           - "storage_module"
           - '"status":"loaded"'
@@ -430,17 +430,17 @@ sections:
           }
         check_file: "config.json"
       - title: "Watch for the start event"
-        run: "sh -c './bin/logosctl watch storage_module --event storageStart --json > start-event.txt 2>&1 & echo $! > watch.pid'"
-        code_block: "logosctl watch storage_module --event storageStart --json"
+        run: "sh -c './bin/logoscore watch storage_module --event storageStart --json > start-event.txt 2>&1 & echo $! > watch.pid'"
+        code_block: "logoscore watch storage_module --event storageStart --json"
       - run: "sleep 2"
       - title: "init"
-        run: "./bin/logosctl call storage_module init @config.json"
-        code_block: "logosctl call storage_module init @config.json"
+        run: "./bin/logoscore call storage_module init @config.json"
+        code_block: "logoscore call storage_module init @config.json"
         expect_contains:
           - '"result":true'
       - title: "start"
-        run: "./bin/logosctl call storage_module start"
-        code_block: "logosctl call storage_module start"
+        run: "./bin/logoscore call storage_module start"
+        code_block: "logoscore call storage_module start"
         expect_contains:
           - '"result":true'
       - title: "Confirm the start event arrived"
@@ -463,21 +463,21 @@ sections:
       inter-module boundary.
     steps:
       - title: "Load the probe"
-        run: "./bin/logosctl module load probe_storage"
-        code_block: "logosctl module load probe_storage"
+        run: "./bin/logoscore load-module probe_storage"
+        code_block: "logoscore load-module probe_storage"
         expect_contains:
           - "probe_storage"
       - title: "Call storage_module from the probe"
         text: "A cross-module call: probe -> storage_module -> back."
-        run: "./bin/logosctl call probe_storage targetVersion"
-        code_block: "logosctl call probe_storage targetVersion"
+        run: "./bin/logoscore call probe_storage targetVersion"
+        code_block: "logoscore call probe_storage targetVersion"
         expect_contains:
           - '"result":"probe-call-ok'
       - title: "Subscribe to the event"
-        run: "./bin/logosctl call probe_storage subscribe"
-        code_block: "logosctl call probe_storage subscribe"
+        run: "./bin/logoscore call probe_storage subscribe"
+        code_block: "logoscore call probe_storage subscribe"
         expect_contains:
-          # The value, not the envelope: logosctl wraps every successful call
+          # The value, not the envelope: logoscore wraps every successful call
           # in {"status":"ok",...}, so asserting a bare "ok" would pass even
           # when the subscription failed to register.
           - '"result":"ok"'
@@ -487,14 +487,14 @@ sections:
           probe is subscribed, so the payload lands in its state.
         run: |
           echo "hello from the release set" > hello.txt
-          ./bin/logosctl call storage_module uploadUrl "$(pwd)/hello.txt" 65536
-        code_block: 'logosctl call storage_module uploadUrl "$(pwd)/hello.txt" 65536'
+          ./bin/logoscore call storage_module uploadUrl "$(pwd)/hello.txt" 65536
+        code_block: 'logoscore call storage_module uploadUrl "$(pwd)/hello.txt" 65536'
         expect_contains:
           - '"result"'
       - run: "sleep 5"
       - title: "Read the event back out of the probe"
-        run: "./bin/logosctl call probe_storage lastUploadEvent"
-        code_block: "logosctl call probe_storage lastUploadEvent"
+        run: "./bin/logoscore call probe_storage lastUploadEvent"
+        code_block: "logoscore call probe_storage lastUploadEvent"
         expect_contains:
           - "cid"
         post_text: |
@@ -517,8 +517,8 @@ sections:
       as `{"name": "...", "format": "text"}`.)
     steps:
       - title: "Load the scraper"
-        run: "./bin/logosctl module load openmetrics"
-        code_block: "logosctl module load openmetrics"
+        run: "./bin/logoscore load-module openmetrics"
+        code_block: "logoscore load-module openmetrics"
         expect_contains:
           - "openmetrics"
       - title: "Point it at the storage module"
@@ -531,13 +531,13 @@ sections:
               "modules": ["storage_module"]
             }
       - title: "Start the server"
-        run: "./bin/logosctl call openmetrics start @openmetrics.json"
-        code_block: "logosctl call openmetrics start @openmetrics.json"
+        run: "./bin/logoscore call openmetrics start @openmetrics.json"
+        code_block: "logoscore call openmetrics start @openmetrics.json"
         expect_contains:
           - '"result":1'
       - title: "Confirm it is serving"
-        run: "./bin/logosctl call openmetrics getInfo"
-        code_block: "logosctl call openmetrics getInfo"
+        run: "./bin/logoscore call openmetrics getInfo"
+        code_block: "logoscore call openmetrics getInfo"
         expect_contains:
           - '\"running\":true'
       - title: "Scrape /metrics"
@@ -552,8 +552,8 @@ sections:
           - 'module="storage_module"'
           - "# EOF"
       - title: "Stop the server"
-        run: "./bin/logosctl call openmetrics stop"
-        code_block: "logosctl call openmetrics stop"
+        run: "./bin/logoscore call openmetrics stop"
+        code_block: "logoscore call openmetrics stop"
         expect_contains:
           - '"result":1'
 
@@ -564,11 +564,11 @@ sections:
       - title: "Stop"
         run: |
           trap '' TERM
-          ./bin/logosctl daemon stop || true
+          ./bin/logoscore stop || true
           true
       - run: "sleep 2"
       - title: "Confirm"
-        run: "./bin/logosctl daemon status || true"
-        code_block: "logosctl daemon status"
+        run: "./bin/logoscore status || true"
+        code_block: "logoscore status"
         expect_contains:
           - '"status":"not_running"'
