@@ -425,13 +425,26 @@ sections:
         code_block: "logoscore call probe_delivery nodeInfo Version"
         expect_contains:
           - '"result":"probe-call-ok'
-      - run: "sleep 3"
       - title: "The event the probe caught"
-        run: "./bin/logoscore call probe_delivery lastNodeStarted"
+        text: |
+          `start` returns as soon as the node accepts the call; `nodeStarted` is
+          emitted later, by the completion callback. How much later depends on
+          the runner, so this polls for the latched event instead of sleeping a
+          fixed interval and hoping — a three-second sleep was enough on some
+          runs and not others, which is the definition of a flaky test.
+        run: |
+          out=""
+          for i in $(seq 1 30); do
+            out="$(./bin/logoscore call probe_delivery lastNodeStarted 2>&1)"
+            case "$out" in *'"result":"success=true'*) break ;; esac
+            sleep 2
+          done
+          printf '%s\n' "$out"
         code_block: "logoscore call probe_delivery lastNodeStarted"
         expect_contains:
           # Not just "an event arrived" — the event the node emitted on a
-          # successful start. An empty latch or a failed start both fail here.
+          # successful start. An empty latch or a failed start both still fail
+          # here, after the full 60s the loop allows.
           - '"result":"success=true'
         post_text: |
           That event was emitted by the pinned `delivery_module` as its node

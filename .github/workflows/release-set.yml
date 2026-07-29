@@ -81,21 +81,30 @@ jobs:
           path: release-set.lock.json
           if-no-files-found: error
 
+  # One job per spec per platform, rather than one job that runs all five specs
+  # in sequence. The results model was already keyed on (spec, platform), so
+  # this only makes the jobs match it — and it buys three things: a failure
+  # names itself in the job list instead of hiding inside a 900-line log, the
+  # slow spec (basecamp-ui, which builds Qt) stops gating the quick ones, and a
+  # single flaky spec can be re-run without repeating the other fourteen.
   doctests:
-    name: Validate (${{ matrix.platform }})
+    name: ${{ matrix.spec }} (${{ matrix.platform.id }})
     needs: resolve
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: linux-x86_64
-            runner: ubuntu-latest
-          - platform: linux-arm64
-            runner: ubuntu-24.04-arm
-          - platform: macos-arm64
-            runner: macos-latest
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+        platform:
+          - { id: linux-x86_64, runner: ubuntu-latest }
+          - { id: linux-arm64,  runner: ubuntu-24.04-arm }
+          - { id: macos-arm64,  runner: macos-latest }
+        spec:
+          - headless-storage-module
+          - headless-delivery-module
+          - headless-blockchain-module
+          - basecamp-appimage-smoke
+          - basecamp-ui
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -116,49 +125,49 @@ jobs:
       # The portable bundle carries its own Qt but not host graphics drivers —
       # you cannot bundle a GPU driver — so it loads libGL/glvnd from the host
       # exactly as it would on a real desktop. Minimal CI runners have none.
+      # Only the Basecamp specs put a Qt GUI on screen. The portable bundle
+      # carries its own Qt but not host graphics drivers — you cannot bundle a
+      # GPU driver — so it loads libGL/glvnd from the host exactly as it would
+      # on a real desktop. Minimal CI runners have none.
       - name: Install graphics runtime libraries
-        if: startsWith(matrix.platform, 'linux')
+        if: startsWith(matrix.platform.id, 'linux') && startsWith(matrix.spec, 'basecamp')
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libopengl0 libglx0 libgl1 libegl1 libglu1-mesa libvulkan1
 
-      - name: Decide which specs can run here
+      # Can THIS spec run on THIS platform? A pinned release that publishes no
+      # artifact for a platform means skip-and-flag, not fail.
+      - name: Decide whether this spec can run here
         id: select
+        env:
+          SPECS_INPUT: ${{ inputs.specs }}
         run: |
           python3 scripts/select-specs.py release-set.lock.json \
-            --platform "${{ matrix.platform }}" --format github >> "$GITHUB_OUTPUT"
-          python3 scripts/select-specs.py release-set.lock.json \
-            --platform "${{ matrix.platform }}" | tee -a "$GITHUB_STEP_SUMMARY"
+            --platform "${{ matrix.platform.id }}" --only "${{ matrix.spec }}" \
+            --format github >> "$GITHUB_OUTPUT"
+          # An explicit `specs` input narrows the run; a spec left out of it is
+          # not run and must not be reported as passing.
+          if [ -n "$SPECS_INPUT" ]; then
+            case " $SPECS_INPUT " in
+              *" ${{ matrix.spec }} "*) ;;
+              *) echo "deselected=true" >> "$GITHUB_OUTPUT"
+                 echo "not in the requested spec list — not running" ;;
+            esac
+          fi
+          cat "$GITHUB_OUTPUT"
 
-      - name: Run the doc-tests
+      - name: Run the doc-test
         id: run
-        if: steps.select.outputs.any == 'true'
+        if: steps.select.outputs.any == 'true' && steps.select.outputs.deselected != 'true'
         env:
           RELEASE_SET_DIR: ${{ github.workspace }}
           RELEASE_SET_LOCK: ${{ github.workspace }}/release-set.lock.json
           GITHUB_TOKEN: ${{ github.token }}
-          # Via env, never interpolated into the shell: a workflow input is
-          # attacker-influenced text and `${{ }}` substitution happens before
-          # the shell ever sees it.
-          SPECS_INPUT: ${{ inputs.specs }}
-          SELECTED: ${{ steps.select.outputs.specs }}
         run: |
           mkdir -p "${{ runner.temp }}/reports"
-          if [ -n "$SPECS_INPUT" ]; then
-            selected=""
-            for name in $SPECS_INPUT; do
-              selected="$selected doctests/${name%.test.yaml}.test.yaml"
-            done
-          else
-            selected="$SELECTED"
-          fi
-          echo "Running:$selected"
-          # Record what actually ran, so the results cannot claim a spec passed
-          # that the override never executed.
-          echo "ran=$selected" >> "$GITHUB_OUTPUT"
           nix run github:logos-co/logos-doctest -- run \
-            $selected \
+            "doctests/${{ matrix.spec }}.test.yaml" \
             --verbose \
             --continue-on-fail \
             --report "${{ runner.temp }}/reports/index.html"
@@ -168,35 +177,39 @@ jobs:
         env:
           OUTCOME: ${{ steps.run.outcome }}
           SKIPPED: ${{ steps.select.outputs.skipped }}
-          # What the run step actually executed — not what selection proposed,
-          # which diverges whenever the `specs` input overrides it.
-          SPECS: ${{ steps.run.outputs.ran }}
-          PLATFORM: ${{ matrix.platform }}
-          RUNNER_LABEL: ${{ matrix.runner }}
+          DESELECTED: ${{ steps.select.outputs.deselected }}
+          SPEC: ${{ matrix.spec }}
+          PLATFORM: ${{ matrix.platform.id }}
+          RUNNER_LABEL: ${{ matrix.platform.runner }}
           # Must match where the publish job arranges the reports for gh-pages.
           PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.run_id }}
         run: |
           python3 - <<'PY'
           import json, os
+          spec     = os.environ["SPEC"]
           platform = os.environ["PLATFORM"]
           runner   = os.environ["RUNNER_LABEL"]
-          base     = os.environ["PAGES_BASE"].rstrip("/") + "/" + platform + "/"
+          # One report per (spec, platform), so every cell of the validation
+          # table links to the report for exactly that cell.
+          base = f'{os.environ["PAGES_BASE"].rstrip("/")}/{platform}/{spec}/'
 
-          # The runner produces one combined report per platform; every spec that
-          # ran on this platform links to it.
-          status = {"success": "passed", "failure": "failed",
-                    "skipped": "skipped", "": "skipped"}.get(os.environ["OUTCOME"], "failed")
+          skipped = json.loads(os.environ.get("SKIPPED") or "[]")
+          if skipped:
+              # select-specs already explained why, per platform.
+              results = skipped
+          elif os.environ.get("DESELECTED") == "true":
+              results = [{"spec": spec, "platform": platform, "status": "skipped",
+                          "reason": "not in the requested spec list"}]
+          else:
+              status = {"success": "passed", "failure": "failed",
+                        "skipped": "skipped", "": "skipped"}.get(os.environ["OUTCOME"], "failed")
+              results = [{"spec": spec, "platform": platform,
+                          "status": status, "reportUrl": base}]
 
-          results = []
-          for spec in os.environ.get("SPECS", "").split():
-              name = spec.split("/")[-1].removesuffix(".test.yaml")
-              results.append({"spec": name, "platform": platform, "runner": runner,
-                              "status": status, "reportUrl": base})
-          results.extend(json.loads(os.environ["SKIPPED"] or "[]"))
           for entry in results:
               entry.setdefault("runner", runner)
 
-          with open(f"results-{platform}.json", "w") as handle:
+          with open(f"results-{platform}-{spec}.json", "w") as handle:
               json.dump(results, handle, indent=2)
           print(json.dumps(results, indent=2))
           PY
@@ -204,14 +217,14 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: results-${{ matrix.platform }}
-          path: results-${{ matrix.platform }}.json
+          name: results-${{ matrix.platform.id }}-${{ matrix.spec }}
+          path: results-${{ matrix.platform.id }}-${{ matrix.spec }}.json
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: reports-${{ matrix.platform }}
+          name: reports-${{ matrix.platform.id }}-${{ matrix.spec }}
           path: ${{ runner.temp }}/reports/
           if-no-files-found: warn
 
@@ -230,27 +243,37 @@ jobs:
         with:
           path: artifacts
 
-      # The results recorded each report at <run_id>/<platform>/. Publishing
-      # ./artifacts verbatim would put them at <run_id>/reports-<platform>/
-      # instead and every report link in the release description would 404, so
-      # lay the site out to match the URLs that were recorded.
+      # The results recorded each report at <run_id>/<platform>/<spec>/.
+      # Publishing ./artifacts verbatim would put them at
+      # <run_id>/reports-<platform>-<spec>/ instead and every report link in the
+      # release description would 404, so lay the site out to match the URLs
+      # that were recorded.
       - name: Arrange the reports for publishing
         id: site
         run: |
-          found=""
+          found=0
           for dir in artifacts/reports-*; do
             [ -f "$dir/index.html" ] || continue
-            platform="${dir#artifacts/reports-}"
-            mkdir -p "site/$platform"
-            cp "$dir/index.html" "site/$platform/index.html"
-            found="$found $platform"
+            # reports-<platform>-<spec>; platforms contain no "-" past their
+            # own name, so strip the known platform prefix rather than guess.
+            rest="${dir#artifacts/reports-}"
+            case "$rest" in
+              linux-x86_64-*) platform=linux-x86_64 ;;
+              linux-arm64-*)  platform=linux-arm64 ;;
+              macos-arm64-*)  platform=macos-arm64 ;;
+              *) echo "unrecognised artifact name: $dir" >&2; exit 1 ;;
+            esac
+            spec="${rest#"$platform"-}"
+            mkdir -p "site/$platform/$spec"
+            cp "$dir/index.html" "site/$platform/$spec/index.html"
+            found=$((found + 1))
           done
           echo "found=$found" >> "$GITHUB_OUTPUT"
-          echo "Publishing reports for:$found"
+          echo "Arranged $found report(s)"
           find site -type f | sort
 
       - name: Publish the doc-test reports
-        if: steps.site.outputs.found != ''
+        if: steps.site.outputs.found != '0'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -274,16 +297,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
-          reports=""
-          for dir in site/*; do
-            [ -f "$dir/index.html" ] || continue
-            platform="$(basename "$dir")"
-            cp "$dir/index.html" "report-$platform.html"
-            reports="$reports report-$platform.html"
-          done
-          # shellcheck disable=SC2086
+          # Fifteen separate HTML reports would bury the two assets that matter,
+          # so they travel as one archive. The per-cell links in the notes point
+          # at the browsable copies on gh-pages.
+          tar -czf reports.tar.gz -C site .
+          ls -la reports.tar.gz
           gh release create "v$VERSION" \
             --title "Logos Release Set $VERSION" \
             --notes-file RELEASE.md \
             --target "${{ github.sha }}" \
-            release-set.lock.json $reports
+            release-set.lock.json reports.tar.gz

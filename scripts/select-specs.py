@@ -103,14 +103,21 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("lock")
     parser.add_argument("--platform", required=True)
+    parser.add_argument("--only", default=None,
+                        help="consider just this one spec (the workflow runs one "
+                             "spec per job, so each job asks only about its own)")
     parser.add_argument("--format", choices=("text", "json", "github"), default="text")
     args = parser.parse_args()
 
     lock = json.load(open(args.lock, encoding="utf-8"))
     entries = index_by_name(lock)
 
+    if args.only and args.only not in SPECS:
+        sys.exit(f"unknown spec {args.only!r}; known: {', '.join(sorted(SPECS))}")
+    considered = [args.only] if args.only else sorted(SPECS)
+
     runnable, skipped = [], []
-    for spec in sorted(SPECS):
+    for spec in considered:
         reasons = missing_for(spec, lock, entries, args.platform)
         if reasons:
             skipped.append({
