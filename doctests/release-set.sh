@@ -10,7 +10,7 @@
 #   release-set.sh fetch <component> <bin>  download + extract a released binary
 #   release-set.sh path <bin>               print the REAL path behind ./bin/<bin>
 #   release-set.sh seed-modules <component> copy a tool's bundled modules into MODULES_DIR
-#   release-set.sh wait-daemon [secs]       block until the logoscore daemon answers
+#   release-set.sh wait-daemon [secs]       block until the logosctl daemon answers
 #   release-set.sh install <pkg> [...]      lgpd download + verify + lgpm install
 #
 # Exit code 78 means "this artifact is not published for this platform" — the
@@ -152,10 +152,10 @@ PY
 # Expose a fetched binary as ./bin/<name>.
 #
 # A wrapper that `exec`s the real file, NOT a symlink. These tools locate their
-# siblings relative to their own executable: logoscore looks for `logos_host`
+# siblings relative to their own executable: logosctl looks for `logos_host`
 # next to itself and for `../modules`. On macOS that lookup uses
 # _NSGetExecutablePath, which reports the path the process was INVOKED with and
-# does not resolve symlinks — so through a symlink logoscore searches ./bin and
+# does not resolve symlinks — so through a symlink logosctl searches ./bin and
 # reports "logos_host not found", and every module load fails. `exec` replaces
 # the process image, so the running program's own path is the real one inside
 # the bundle and both lookups land where they should, on every platform.
@@ -169,9 +169,18 @@ WRAPPER
   printf '%s\n' "$target" > "$BIN/.$binname.path"
 }
 
+# fetch <component> <bin-name> [alternate-name...]
+#
+# The extra names exist because a tool can be renamed upstream between releases
+# while a release set still pins an older one: the specs ask for `logosctl`, but
+# the bundle a pinned 0.2.2 ships still contains `bin/logoscore`. Naming both
+# means the same spec works either side of the rename, and ./bin/<bin-name> is
+# what the spec calls regardless of which one was found.
 cmd_fetch() {
-  local component="${1:?usage: fetch <component> <bin-name>}"
-  local binname="${2:?usage: fetch <component> <bin-name>}"
+  local component="${1:?usage: fetch <component> <bin-name> [alt-name...]}"
+  local binname="${2:?usage: fetch <component> <bin-name> [alt-name...]}"
+  shift 2
+  local altnames=("$binname" "$@")
   local platform url file workdir
   platform="$(detect_platform)"
   url="$(asset_url "$component")"
@@ -212,12 +221,15 @@ cmd_fetch() {
   # A directory bundle: find the executable by NAME, either in bin/ or inside a
   # .app's Contents/MacOS/. Matching "*/MacOS/*" instead would take whichever
   # executable the filesystem returned first — Basecamp's .app ships
-  # LogosBasecamp, LogosBasecamp.bin, ui-host, logoscore and logos_host side by
+  # LogosBasecamp, LogosBasecamp.bin, ui-host, logosctl and logos_host side by
   # side, so an unanchored match silently launches the wrong program.
-  local exe
-  exe="$(find "$workdir" -type f -perm -u+x \
-           \( -path "*/bin/$binname" -o -path "*/MacOS/$binname" \) -print -quit)"
-  [ -n "$exe" ] || die "no executable named '$binname' in $(basename "$url") — \
+  local exe=""
+  for candidate in "${altnames[@]}"; do
+    exe="$(find "$workdir" -type f -perm -u+x \
+             \( -path "*/bin/$candidate" -o -path "*/MacOS/$candidate" \) -print -quit)"
+    [ -n "$exe" ] && break
+  done
+  [ -n "$exe" ] || die "no executable named $(printf "'%s' " "${altnames[@]}")in $(basename "$url") — \
 found: $(find "$workdir" -type f -perm -u+x \( -path '*/bin/*' -o -path '*/MacOS/*' \) \
 -exec basename {} \; | sort -u | tr '\n' ' ')"
   link_binary "$binname" "$PWD/$exe"
@@ -231,7 +243,7 @@ cmd_path() {
   cat "$BIN/.$binname.path"
 }
 
-# wait-daemon — block until logoscore answers, or give up.
+# wait-daemon — block until logosctl answers, or give up.
 #
 # Startup is not instantaneous and not constant: the daemon loads
 # capability_module before it writes its client config, which takes a couple of
@@ -240,9 +252,9 @@ cmd_path() {
 cmd_wait_daemon() {
   local timeout="${1:-60}" i=1
   while [ "$i" -le "$timeout" ]; do
-    if "$BIN/logoscore" status >/dev/null 2>&1; then
+    if "$BIN/logosctl" status >/dev/null 2>&1; then
       echo "==> daemon ready after ${i}s"
-      "$BIN/logoscore" status
+      "$BIN/logosctl" status
       return 0
     fi
     sleep 1
@@ -250,12 +262,12 @@ cmd_wait_daemon() {
   done
   echo "--- daemon log ---" >&2
   tail -30 logs.txt >&2 2>/dev/null || true
-  die "logoscore did not become ready within ${timeout}s"
+  die "logosctl did not become ready within ${timeout}s"
 }
 
 # seed-modules — copy a fetched tool's bundled modules into MODULES_DIR.
 #
-# logoscore ships capability_module inside its own bundle and finds it relative
+# logosctl ships capability_module inside its own bundle and finds it relative
 # to its executable. Because we run it through a symlink in ./bin, that lookup
 # lands on our lgpm target directory on macOS (see `path` above) and the module
 # is never found — every load-module then stalls on capability negotiation and

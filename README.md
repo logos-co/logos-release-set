@@ -22,7 +22,7 @@ Four groups, two pinning styles:
 
 | Group | Pinned by | What it is |
 |---|---|---|
-| `apps` | GitHub release **tag** | Basecamp, logoscore, lgpm, lgpd |
+| `apps` | GitHub release **tag** | Basecamp, logosctl, lgpm, lgpd |
 | `devUtils` | GitHub release **tag** | logos-module-builder |
 | `modules` | catalog **version** | `core` modules — install to `--modules-dir` |
 | `uiApps` | catalog **version** | `ui_qml` plugins — install to `--ui-plugins-dir` |
@@ -126,7 +126,7 @@ Everything is the **portable** variant, end to end. A dev build RPATHs into
 ### Two things that look like details and are not
 
 **Fetched tools are launched through an `exec` wrapper, never a symlink.**
-`logoscore` finds `logos_host` next to its own executable and its bundled
+`logosctl` finds `logos_host` next to its own executable and its bundled
 modules at `../modules`. On macOS that lookup uses `_NSGetExecutablePath`, which
 reports the path the process was *invoked* with and does not resolve symlinks —
 so behind a symlink the runtime searches `./bin`, reports `logos_host not
@@ -135,7 +135,7 @@ the running program's own path is the real one inside the bundle. The same
 applies to launching Basecamp, hence `release-set.sh path`.
 
 **`capability_module` is seeded into the modules directory.** It is the auth
-handshake every `load-module` needs, and it ships inside the `logoscore` bundle.
+handshake every `load-module` needs, and it ships inside the `logosctl` bundle.
 Copying it into the directory passed to `-m` makes the runtime independent of
 where it thinks its own bundle is.
 

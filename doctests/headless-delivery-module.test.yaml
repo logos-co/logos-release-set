@@ -5,7 +5,7 @@ release: ""
 intro: |
   This doc-test validates the `delivery_module` pinned by
   [`release-set.json`](../release-set.json), using only released artifacts:
-  `logoscore`, `lgpd` and `lgpm` downloaded from their GitHub releases at the
+  `logosctl`, `lgpd` and `lgpm` downloaded from their GitHub releases at the
   pinned tags, and `delivery_module` pulled from the module catalog at the
   pinned version and checksum-verified before install.
 
@@ -57,27 +57,27 @@ sections:
       Downloaded at the tags the release set pins. Linux artifacts are AppImages,
       which we extract rather than mount — CI runners have no FUSE.
     steps:
-      - title: "Fetch logoscore, lgpd and lgpm"
+      - title: "Fetch logosctl, lgpd and lgpm"
         run: |
-          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logoscore
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logosctl logoscore
           "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-downloader lgpd
           "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
         code_block: |
-          ./doctests/release-set.sh fetch logos-logoscore-cli logoscore
+          ./doctests/release-set.sh fetch logos-logoscore-cli logosctl logoscore
           ./doctests/release-set.sh fetch logos-package-downloader lgpd
           ./doctests/release-set.sh fetch logos-package-manager lgpm
-        check_file: "bin/logoscore"
+        check_file: "bin/logosctl"
       - title: "Seed the runtime's own modules"
         text: |
-          `logoscore` ships `capability_module` — the auth handshake every
+          `logosctl` ships `capability_module` — the auth handshake every
           `load-module` needs — inside its bundle, and finds it relative to its
-          own executable. We run it through `./bin/logoscore`, and on macOS that
+          own executable. We run it through `./bin/logosctl`, and on macOS that
           lookup follows the *symlink* path rather than the bundle, so the module
           would never be found and every load would stall then fail. Copying the
           bundled modules into the directory we hand to `-m` removes the
           dependency on that resolution entirely.
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" seed-modules logos-logoscore-cli'
-        code_block: "cp -RL <logoscore-bundle>/modules/. ./modules/"
+        code_block: "cp -RL <logosctl-bundle>/modules/. ./modules/"
         check_file: "modules/capability_module"
 
   - title: "Install the pinned delivery_module"
@@ -317,32 +317,32 @@ sections:
       lifecycle call, so nothing is missed.
     steps:
       - title: "Start the daemon"
-        run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
-        code_block: "logoscore -D -m ./modules > logs.txt &"
+        run: "./bin/logosctl --config-dir . daemon start --detach"
+        code_block: "logosctl --config-dir . daemon start --detach"
       - title: "Wait for it to come up"
         text: |
           The daemon loads `capability_module` before it publishes its client
           config, so it is answerable a few seconds after launch — longer on a
           loaded runner. Poll rather than guess at a sleep.
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" wait-daemon 90'
-        code_block: "logoscore status"
+        code_block: "logosctl daemon status"
         expect_contains:
           - '"status":"running"'
       - title: "Load delivery_module"
-        run: "./bin/logoscore load-module delivery_module"
-        code_block: "logoscore load-module delivery_module"
+        run: "./bin/logosctl module load delivery_module"
+        code_block: "logosctl module load delivery_module"
         expect_contains:
           - "delivery_module"
       - title: "Load the probe"
-        run: "./bin/logoscore load-module probe_delivery"
-        code_block: "logoscore load-module probe_delivery"
+        run: "./bin/logosctl module load probe_delivery"
+        code_block: "logosctl module load probe_delivery"
         expect_contains:
           - "probe_delivery"
       - title: "Subscribe"
-        run: "./bin/logoscore call probe_delivery subscribe"
-        code_block: "logoscore call probe_delivery subscribe"
+        run: "./bin/logosctl call probe_delivery subscribe"
+        code_block: "logosctl call probe_delivery subscribe"
         expect_contains:
-          # The value, not the envelope: logoscore wraps every successful call
+          # The value, not the envelope: logosctl wraps every successful call
           # in {"status":"ok",...}, so asserting a bare "ok" would pass even
           # when the subscription failed to register.
           - '"result":"ok"'
@@ -391,22 +391,22 @@ sections:
           }
         check_file: "delivery-config.json"
       - title: "createNode"
-        run: "./bin/logoscore call delivery_module createNode @delivery-config.json"
-        code_block: "logoscore call delivery_module createNode @delivery-config.json"
+        run: "./bin/logosctl call delivery_module createNode @delivery-config.json"
+        code_block: "logosctl call delivery_module createNode @delivery-config.json"
         expect_contains:
           - '"success":true'
       - title: "start"
-        run: "./bin/logoscore call delivery_module start"
-        code_block: "logoscore call delivery_module start"
+        run: "./bin/logosctl call delivery_module start"
+        code_block: "logosctl call delivery_module start"
         expect_contains:
           - '"success":true'
       - title: "Verify the node is up"
         run: |
-          ./bin/logoscore call delivery_module getNodeInfo Version
-          ./bin/logoscore call delivery_module getNodeInfo MyBoundPorts
+          ./bin/logosctl call delivery_module getNodeInfo Version
+          ./bin/logosctl call delivery_module getNodeInfo MyBoundPorts
         code_block: |
-          logoscore call delivery_module getNodeInfo Version
-          logoscore call delivery_module getNodeInfo MyBoundPorts
+          logosctl call delivery_module getNodeInfo Version
+          logosctl call delivery_module getNodeInfo MyBoundPorts
         expect_contains:
           # The success flag, not the mere presence of a result envelope — a
           # module answering success:false also prints a "result", which is
@@ -421,14 +421,14 @@ sections:
       to the probe.
     steps:
       - title: "The probe's own call"
-        run: "./bin/logoscore call probe_delivery nodeInfo Version"
-        code_block: "logoscore call probe_delivery nodeInfo Version"
+        run: "./bin/logosctl call probe_delivery nodeInfo Version"
+        code_block: "logosctl call probe_delivery nodeInfo Version"
         expect_contains:
           - '"result":"probe-call-ok'
       - run: "sleep 3"
       - title: "The event the probe caught"
-        run: "./bin/logoscore call probe_delivery lastNodeStarted"
-        code_block: "logoscore call probe_delivery lastNodeStarted"
+        run: "./bin/logosctl call probe_delivery lastNodeStarted"
+        code_block: "logosctl call probe_delivery lastNodeStarted"
         expect_contains:
           # Not just "an event arrived" — the event the node emitted on a
           # successful start. An empty latch or a failed start both fail here.
@@ -454,8 +454,8 @@ sections:
       implement.
     steps:
       - title: "Load the scraper"
-        run: "./bin/logoscore load-module openmetrics"
-        code_block: "logoscore load-module openmetrics"
+        run: "./bin/logosctl module load openmetrics"
+        code_block: "logosctl module load openmetrics"
         expect_contains:
           - "openmetrics"
       - title: "Point it at the delivery module"
@@ -470,13 +470,13 @@ sections:
               ]
             }
       - title: "Start the server"
-        run: "./bin/logoscore call openmetrics start @openmetrics.json"
-        code_block: "logoscore call openmetrics start @openmetrics.json"
+        run: "./bin/logosctl call openmetrics start @openmetrics.json"
+        code_block: "logosctl call openmetrics start @openmetrics.json"
         expect_contains:
           - '"result":1'
       - title: "Confirm it is serving"
-        run: "./bin/logoscore call openmetrics getInfo"
-        code_block: "logoscore call openmetrics getInfo"
+        run: "./bin/logosctl call openmetrics getInfo"
+        code_block: "logosctl call openmetrics getInfo"
         expect_contains:
           - '\"running\":true'
       - title: "Scrape /metrics"
@@ -490,8 +490,8 @@ sections:
           - 'module="delivery_module"'
           - "# EOF"
       - title: "Stop the server"
-        run: "./bin/logoscore call openmetrics stop"
-        code_block: "logoscore call openmetrics stop"
+        run: "./bin/logosctl call openmetrics stop"
+        code_block: "logosctl call openmetrics stop"
         expect_contains:
           - '"result":1'
 
@@ -502,11 +502,11 @@ sections:
       - title: "Stop"
         run: |
           trap '' TERM
-          ./bin/logoscore stop || true
+          ./bin/logosctl daemon stop || true
           true
       - run: "sleep 2"
       - title: "Confirm"
-        run: "./bin/logoscore status || true"
-        code_block: "logoscore status"
+        run: "./bin/logosctl daemon status || true"
+        code_block: "logosctl daemon status"
         expect_contains:
           - '"status":"not_running"'
