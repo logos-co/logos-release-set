@@ -274,6 +274,17 @@ jobs:
             cp "$dir/index.html" "site/$platform/$spec/index.html"
             found=$((found + 1))
           done
+          # Travels with the reports so the landing page can name this run by
+          # its release version instead of a bare run id.
+          cat > site/meta.json <<META
+          {
+            "version": "${{ needs.resolve.outputs.version }}",
+            "runId": "${{ github.run_id }}",
+            "ref": "${{ github.ref_name }}",
+            "sha": "${{ github.sha }}",
+            "generatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          META
           echo "found=$found" >> "$GITHUB_OUTPUT"
           echo "Arranged $found report(s)"
           find site -type f | sort
@@ -287,6 +298,29 @@ jobs:
           destination_dir: ${{ github.run_id }}
           keep_files: true
           commit_message: "Release-set reports for ${{ needs.resolve.outputs.version }} (${{ github.sha }})"
+
+      # Without this the site root is empty: the reports only exist under
+      # <run_id>/<platform>/<spec>/, which the release notes link into directly
+      # but nobody can discover by opening the site. Regenerated from whatever
+      # is on gh-pages after the push above, so it covers every run, not just
+      # this one.
+      - name: Build the reports landing page
+        if: steps.site.outputs.found != '0'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/render-pages-index.py \
+            --repo "${{ github.repository }}" -o root/index.html
+          head -20 root/index.html
+
+      - name: Publish the landing page
+        if: steps.site.outputs.found != '0'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./root
+          keep_files: true
+          commit_message: "Reports index for ${{ needs.resolve.outputs.version }}"
 
       - name: Merge results and render the release notes
         run: |
