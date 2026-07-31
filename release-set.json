@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "CHANGE-ME",
+  "version": "0.2.0.2",
   "name": "logos-release-set",
   "displayName": "Logos Release Set",
   "description": "The set of Logos app, dev-util and module releases published and supported together.",
@@ -11,32 +11,32 @@
   },
 
   "apps": [
-    { "name": "logos-basecamp",           "repo": "logos-co/logos-basecamp",           "releaseTag": "CHANGE-ME" },
-    { "name": "logos-logoscore-cli",      "repo": "logos-co/logos-logoscore-cli",      "releaseTag": "CHANGE-ME" },
-    { "name": "logos-package-manager",    "repo": "logos-co/logos-package-manager",    "releaseTag": "CHANGE-ME" },
-    { "name": "logos-package-downloader", "repo": "logos-co/logos-package-downloader", "releaseTag": "CHANGE-ME" }
+    { "name": "logos-basecamp",           "repo": "logos-co/logos-basecamp",           "releaseTag": "0.2.2" },
+    { "name": "logos-logoscore-cli",      "repo": "logos-co/logos-logoscore-cli",      "releaseTag": "0.2.2" },
+    { "name": "logos-package-manager",    "repo": "logos-co/logos-package-manager",    "releaseTag": "0.2.1" },
+    { "name": "logos-package-downloader", "repo": "logos-co/logos-package-downloader", "releaseTag": "0.2.1" }
   ],
 
   "devUtils": [
-    { "name": "logos-module-builder",     "repo": "logos-co/logos-module-builder",     "releaseTag": "CHANGE-ME" }
+    { "name": "logos-module-builder",     "repo": "logos-co/logos-module-builder",     "releaseTag": "0.2.5" }
   ],
 
   "modules": [
-    { "name": "blockchain_module",    "version": "CHANGE-ME" },
-    { "name": "delivery_module",      "version": "CHANGE-ME" },
-    { "name": "chat_module",          "version": "CHANGE-ME" },
-    { "name": "lez_indexer_module",   "version": "CHANGE-ME" },
-    { "name": "libp2p_module",        "version": "CHANGE-ME" },
-    { "name": "logos_execution_zone", "version": "CHANGE-ME" },
-    { "name": "openmetrics",          "version": "CHANGE-ME" },
-    { "name": "storage_module",       "version": "CHANGE-ME" }
+    { "name": "blockchain_module",    "version": "0.2.0" },
+    { "name": "delivery_module",      "version": "0.1.3" },
+    { "name": "chat_module",          "version": "0.2.0" },
+    { "name": "lez_indexer_module",   "version": "1.0.0" },
+    { "name": "libp2p_module",        "version": "1.0.0" },
+    { "name": "logos_execution_zone", "version": "1.0.0" },
+    { "name": "openmetrics",          "version": "0.1.1" },
+    { "name": "storage_module",       "version": "2.0.1" }
   ],
 
   "uiApps": [
-    { "name": "blockchain_ui",        "version": "CHANGE-ME" },
-    { "name": "chat_ui",              "version": "CHANGE-ME" },
-    { "name": "lez_explorer_ui",      "version": "CHANGE-ME" },
-    { "name": "lez_wallet_ui",        "version": "CHANGE-ME" },
-    { "name": "storage_ui",           "version": "CHANGE-ME" }
+    { "name": "blockchain_ui",        "version": "0.2.0" },
+    { "name": "chat_ui",              "version": "0.2.0" },
+    { "name": "lez_explorer_ui",      "version": "1.0.0" },
+    { "name": "lez_wallet_ui",        "version": "1.0.0" },
+    { "name": "storage_ui",           "version": "2.0.2" }
   ]
 }
