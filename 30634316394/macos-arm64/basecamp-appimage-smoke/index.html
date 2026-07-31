@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tutorial Execution Report</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --pass: #2ea043; --fail: #f85149; --info: #d29922;
+    --code-bg: #0b0f14;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--panel);
+    border-bottom: 1px solid var(--border); padding: 12px 20px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .pill { padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.pass { background: rgba(46,160,67,.15); color: var(--pass); }
+  .pill.fail { background: rgba(248,81,73,.15); color: var(--fail); }
+  .pill.skip { background: rgba(210,153,34,.15); color: var(--info); }
+  select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  main { max-width: 1600px; margin: 0 auto; padding: 16px; }
+  .tutorial-title { font-size: 20px; font-weight: 700; margin: 24px 0 8px; color: #fff; }
+  .row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+    border: 1px solid var(--border); border-radius: 8px; margin: 10px 0; overflow: hidden;
+  }
+  .row.preamble, .row.section { grid-template-columns: 1fr; }
+  .col { padding: 14px 18px; min-width: 0; }
+  .col.left { border-right: 1px solid var(--border); }
+  .row.preamble .col.left, .row.section .col.left { border-right: none; }
+  .col.right { background: var(--panel); }
+  /* A row containing any failed step is tinted red end-to-end so it's
+     impossible to miss when scanning the report. */
+  .row.has-fail { border-color: var(--fail); box-shadow: 0 0 0 1px var(--fail); }
+  .row.has-fail .col.left { background: rgba(248,81,73,.07); border-right-color: var(--fail); }
+  .row.has-fail .col.right { background: rgba(248,81,73,.12); }
+  .col-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
+  .md :first-child { margin-top: 0; }
+  .md h1 { font-size: 22px; } .md h2 { font-size: 18px; } .md h3 { font-size: 15px; }
+  .md pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; }
+  .md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .md :not(pre) > code { background: rgba(110,118,129,.2); padding: .15em .4em; border-radius: 4px; }
+  .md table { border-collapse: collapse; margin: 8px 0; }
+  .md th, .md td { border: 1px solid var(--border); padding: 5px 10px; }
+  .md blockquote { border-left: 3px solid var(--border); margin: 8px 0; padding: 2px 12px; color: var(--muted); }
+  .md img { width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; }
+  .exec { margin-bottom: 14px; }
+  .exec:last-child { margin-bottom: 0; }
+  .exec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .badge { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 4px; }
+  .badge.pass { background: rgba(46,160,67,.15); color: var(--pass); }
+  .badge.fail { background: rgba(248,81,73,.15); color: var(--fail); }
+  .badge.info { background: rgba(210,153,34,.15); color: var(--info); }
+  .kind { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .note { color: var(--muted); font-size: 12.5px; margin-bottom: 6px; }
+  pre.cmd { background: var(--code-bg); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: 10px 12px; margin: 0 0 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+  pre.output { background: #010409; border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 0; overflow-x: auto; max-height: 360px; overflow-y: auto; color: #b9c1ca; }
+  pre.cmd, pre.output { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45; }
+  .empty { color: var(--muted); font-style: italic; font-size: 12.5px; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 12px; margin-bottom: 4px; }
+  /* GitHub-style permalinks: every heading carries a link icon in the left
+     gutter (revealed on hover/focus) that copies a deep link to that section.
+     scroll-margin-top keeps the target clear of the sticky header. */
+  .heading-anchored { position: relative; scroll-margin-top: 76px; }
+  a.anchor {
+    position: absolute; left: -18px; top: 0; width: 16px; height: 1.55em;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--muted); opacity: 0; text-decoration: none;
+    transition: opacity .1s ease-in;
+  }
+  a.anchor svg { width: 14px; height: 14px; display: block; }
+  .heading-anchored:hover > a.anchor, a.anchor:focus { opacity: 1; }
+  a.anchor:hover { color: var(--accent); }
+  .heading-anchored.flash { animation: flash 1.4s ease-out; border-radius: 4px; }
+  @keyframes flash {
+    from { background: rgba(88,166,255,.28); box-shadow: 0 0 0 4px rgba(88,166,255,.28); }
+    to { background: transparent; box-shadow: 0 0 0 4px transparent; }
+  }
+  #toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 7px 14px; font-size: 12.5px; z-index: 20;
+    opacity: 0; pointer-events: none; transition: opacity .15s ease-in-out;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tutorial Execution Report</h1>
+  <span id="summary"></span>
+  <label style="margin-left:auto; font-size:12px; color:var(--muted)">Tutorial
+    <select id="picker"></select>
+  </label>
+</header>
+<main id="main"></main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script id="report-data" type="application/json">{"generated_platform": "Darwin", "summary": {"passed": 7, "failed": 0, "skipped": 0}, "tutorials": [{"meta": {"name": "Smoke-testing the shipped Basecamp artifact", "platform": "Darwin (ext=dylib)", "release": "(none)"}, "rows": [{"md": "# Smoke-testing the shipped Basecamp artifact\n\nThis doc-test runs **the artifact a user actually downloads** \u2014 the Basecamp\nAppImage (Linux) or `.dmg` (macOS) attached to the release the release set\npins \u2014 against a user directory populated with every module and UI app in the\nset, installed from the catalog with `lgpd` and `lgpm`.\n\nIt is deliberately a *smoke* test. Shipping builds have the QML inspector\ncompiled out (it is a test-only feature, off in every release artifact), so\nnothing can drive their UI. What this proves is still worth proving: the\nshipped binary starts on a real user-dir full of pinned modules, stays up, and\nreports no plugin or QML load failures.\n\nThe companion spec, [`basecamp-ui`](basecamp-ui.md), drives the UI properly by\nrebuilding the *same pinned commit* with the inspector enabled.\n\n**What you'll build:** The shipped Basecamp artifact, launched headless against a user directory holding every module and UI app in the release set.\n\n**What you'll learn:**\n\n- How to populate a Basecamp `--user-dir` from the module catalog\n- Why core modules and UI plugins land in different directories\n- How to smoke-test a shipping artifact that cannot be driven by a test harness\n- What \"the inspector is off in release builds\" means for what is testable\n\n## Prerequisites\n\n- **A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64).\n- **On Linux:** the usual desktop graphics libraries (`libopengl0`, `libgl1`, `libegl1`). The portable bundle loads them from the host, exactly as it would on a real desktop.\n- **`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API).", "execs": []}, {"md": "## Step 1: Resolve the release set\n\nThe resolver turns the pinned tags and versions into\n`release-set.lock.json` \u2014 repository URL, commit, download URL and checksum\nfor every artifact.", "execs": []}, {"md": "### 1.1 Resolve\n\n```bash\n./doctests/release-set.sh lock\n```", "execs": [{"kind": "run", "cmd": "\"$RELEASE_SET_DIR/doctests/release-set.sh\" lock", "status": "pass", "exit_code": 0, "output": "==> reusing pre-resolved /Users/runner/work/logos-release-set/logos-release-set/release-set.lock.json\nrelease set 0.2.0.2  (logos-co/logos-modules-release)\n  logos-basecamp               0.2.2        d41a72bc7d\n  logos-logoscore-cli          0.2.2        8720885dd8\n  logos-package-manager        0.2.1        202af6fa0f\n  logos-package-downloader     0.2.1        02503323b4\n  logos-module-builder         0.2.5        8e4ea1c1d0\n  blockchain_module            0.2.0        88d57c92b5\n  delivery_module              0.1.3        794c21cbe1\n  chat_module                  0.2.0        afb965589a\n  lez_indexer_module           1.0.0        62c1af660f\n  libp2p_module                1.0.0        31ecb52ed6\n  logos_execution_zone         1.0.0        b555cd5e81\n  openmetrics                  0.1.1        f8da2a025c\n  storage_module               2.0.1        8feb7cc0f7\n  blockchain_ui                0.2.0        920d9b2821\n  chat_ui                      0.2.0        b118c53ffd\n  lez_explorer_ui              1.0.0        643999b67c\n  lez_wallet_ui                1.0.0        f140bd8495\n  storage_ui                   2.0.2        823be657d2\n", "note": ""}]}, {"md": "## Step 2: Fetch the package manager CLIs\n\n`lgpd` and `lgpm` at the tags the release set pins \u2014 the same tools a user\nwould install packages with.", "execs": []}, {"md": "### 2.1 Fetch lgpd and lgpm\n\n```bash\n./doctests/release-set.sh fetch logos-package-downloader lgpd\n./doctests/release-set.sh fetch logos-package-manager lgpm\n```", "execs": [{"kind": "run", "cmd": "\"$RELEASE_SET_DIR/doctests/release-set.sh\" fetch logos-package-downloader lgpd\n\"$RELEASE_SET_DIR/doctests/release-set.sh\" fetch logos-package-manager lgpm\n", "status": "pass", "exit_code": 0, "output": "==> logos-package-downloader (macos-arm64): lgpd-aarch64-macos.tar.gz\n    -> /private/tmp/doctest-test-_k8q6b91/bin/lgpd (bundle: lgpd-aarch64-macos/bin/lgpd)\n==> logos-package-manager (macos-arm64): lgpm-aarch64-macos.tar.gz\n    -> /private/tmp/doctest-test-_k8q6b91/bin/lgpm (bundle: lgpm-aarch64-macos/bin/lgpm)\n", "note": ""}]}, {"md": "## Step 3: Populate a user directory from the catalog\n\nEvery module and UI app in the release set, downloaded at its pinned\nversion, checksum-verified, and installed into one `--user-dir` tree.\n\n`lgpm` decides where each package lands purely from its manifest `type`:\n`core` modules go to `--modules-dir`, `ui_qml` plugins to\n`--ui-plugins-dir`. Basecamp reads both from the user directory at\nstartup.", "execs": []}, {"md": "### 3.1 Install everything the set pins\n\n```bash\nlgpm --modules-dir ./testdata/modules --ui-plugins-dir ./testdata/plugins \\\n     install --file packages/<each>.lgx\n```", "execs": [{"kind": "run", "cmd": "mkdir -p testdata/modules testdata/plugins\nMODULES_DIR=./testdata/modules PLUGINS_DIR=./testdata/plugins \\\n  \"$RELEASE_SET_DIR/doctests/release-set.sh\" install-all\n", "status": "pass", "exit_code": 0, "output": "==> lgpd download blockchain_module --version 0.2.0\nDownloading blockchain_module v0.2.0... done\n  -> packages/blockchain_module-0.2.0.lgx\n    sha256 OK (874a7d73553d\u2026)\nInstalling from file: packages/blockchain_module-0.2.0.lgx...Warning: Package is unsigned: packages/blockchain_module-0.2.0.lgx\n done\nInstalled to: ./testdata/modules\n==> lgpd download delivery_module --version 0.1.3\nDownloading delivery_module v0.1.3... done\n  -> packages/delivery_module-0.1.3.lgx\n    sha256 OK (9d48412fa855\u2026)\nInstalling from file: packages/delivery_module-0.1.3.lgx...Warning: Package is unsigned: packages/delivery_module-0.1.3.lgx\n done\nInstalled to: ./testdata/modules\n==> lgpd download chat_module --version 0.2.0\nDownloading chat_module v0.2.0... done\n  -> packages/chat_module-0.2.0.lgx\n    sha256 OK (29f7e5a9c478\u2026)\nInstalling from file: packages/chat_module-0.2.0.lgx...Warning: Package is unsigned: packages/chat_module-0.2.0.lgx\n done\nInstalled to: ./testdata/modules\n==> lgpd download lez_indexer_module --version 1.0.0\nDownloading lez_indexer_module v1.0.0... done\n  -> packages/lez_indexer_module-1.0.0.lgx\n    sha256 OK (bd403571c1da\u2026)\nInstalling from file: packages/lez_indexer_module-1.0.0.lgx...Warning: Package is unsigned: packages/lez_indexer_module-1.0.0.lgx\n done\nInstalled to: ./testdata/modules\n==> lgpd download libp2p_module --version 1.0.0\nDownloading libp2p_module v1.0.0... done\n  -> packages/libp2p_module-1.0.0.lgx\n    sha256 OK (966cdabcac4d\u2026)\nInstalling from file: packages/libp2p_module-1.0.0.lgx...Warning: Package is unsigned: packages/libp2p_module-1.0.0.lgx\n done\nInstalled to: ./testdata/modules\n==> lgpd download logos_execution_zone --version 1.0.0\nDownloading logos_execution_zone v1.0.0... done\n  -> packages/logos_execution_zone-1.0.0.lgx\n    sha256 OK (7d14cebf7999\u2026)\nInstalling from file: packages/logos_execution_zone-1.0.0.lgx...Warning: Package is unsigned: packages/logos_execution_zone-1.0.0.lgx\n done\nInstalled to: ./testdata/modules\n==> lgpd download openmetrics --version 0.1.1\nDownloading openmetrics v0.1.1... done\n  -> packages/openmetrics-0.1.1.lgx\n    sha256 OK (83bf44a9d346\u2026)\nInstalling from file: packages/openmetrics-0.1.1.lgx...Warning: Package is unsigned: packages/openmetrics-0.1.1.lgx\n done\nInstalled to: ./testdata/modules\n==> lgpd download storage_module --version 2.0.1\nDownloading storage_module v2.0.1... done\n  -> packages/storage_module-2.0.1.lgx\n    sha256 OK (942661caaff6\u2026)\nInstalling from file: packages/storage_module-2.0.1.lgx...Warning: Package is unsigned: packages/storage_module-2.0.1.lgx\n done\nInstalled to: ./testdata/modules\n==> lgpd download blockchain_ui --version 0.2.0\nDownloading blockchain_ui v0.2.0... done\n  -> packages/blockchain_ui-0.2.0.lgx\n    sha256 OK (bd3c67efa7a9\u2026)\nInstalling from file: packages/blockchain_ui-0.2.0.lgx...Warning: Package is unsigned: packages/blockchain_ui-0.2.0.lgx\n done\nInstalled to: ./testdata/plugins\n==> lgpd download chat_ui --version 0.2.0\nDownloading chat_ui v0.2.0... done\n  -> packages/chat_ui-0.2.0.lgx\n    sha256 OK (49d00e0036d4\u2026)\nInstalling from file: packages/chat_ui-0.2.0.lgx...Warning: Package is unsigned: packages/chat_ui-0.2.0.lgx\n done\nInstalled to: ./testdata/plugins\n==> lgpd download lez_explorer_ui --version 1.0.0\nDownloading lez_explorer_ui v1.0.0... done\n  -> packages/lez_explorer_ui-1.0.0.lgx\n    sha256 OK (df88d8c1d40f\u2026)\nInstalling from file: packages/lez_explorer_ui-1.0.0.lgx...Warning: Package is unsigned: packages/lez_explorer_ui-1.0.0.lgx\n done\nInstalled to: ./testdata/plugins\n==> lgpd download lez_wallet_ui --version 1.0.0\nDownloading lez_wallet_ui v1.0.0... done\n  -> packages/lez_wallet_ui-1.0.0.lgx\n    sha256 OK (3cdd778b245c\u2026)\nInstalling from file: packages/lez_wallet_ui-1.0.0.lgx...Warning: Package is unsigned: packages/lez_wallet_ui-1.0.0.lgx\n done\nInstalled to: ./testdata/plugins\n==> lgpd download storage_ui --version 2.0.2\nDownloading storage_ui v2.0.2... done\n  -> packages/storage_ui-2.0.2.lgx\n    sha256 OK (55a760401828\u2026)\nInstalling from file: packages/storage_ui-2.0.2.lgx...Warning: Package is unsigned: packages/storage_ui-2.0.2.lgx\n done\nInstalled to: ./testdata/plugins\n", "note": ""}]}, {"md": "### 3.2 See what landed where\n\n```bash\nls testdata/modules\nls testdata/plugins\n```", "execs": [{"kind": "run", "cmd": "echo \"--- core modules ---\"; ls testdata/modules\necho \"--- ui plugins ---\";   ls testdata/plugins\n", "status": "pass", "exit_code": 0, "output": "--- core modules ---\nblockchain_module\nchat_module\ndelivery_module\nlez_indexer_module\nlibp2p_module\nlogos_execution_zone\nopenmetrics\nstorage_module\n--- ui plugins ---\nblockchain_ui\nchat_ui\nlez_explorer_ui\nlez_wallet_ui\nstorage_ui\n", "note": ""}]}, {"md": "## Step 4: Fetch the shipped Basecamp artifact\n\nThe release asset itself: an AppImage on Linux (extracted rather than\nmounted \u2014 CI runners have no FUSE), a `.dmg` on macOS.", "execs": []}, {"md": "### 4.1 Fetch Basecamp\n\n```bash\n./doctests/release-set.sh fetch logos-basecamp LogosBasecamp\n```\n\nIf the pinned release publishes no artifact for this platform the step\nreports `SKIP:` and the spec is skipped rather than failed \u2014 the\nrelease description then lists the platform as not validated.", "execs": [{"kind": "run", "cmd": "\"$RELEASE_SET_DIR/doctests/release-set.sh\" fetch logos-basecamp LogosBasecamp", "status": "pass", "exit_code": 0, "output": "==> logos-basecamp (macos-arm64): LogosBasecamp-Desktop-v0.2.2-d41a72-aarch64.dmg\n    -> /private/tmp/doctest-test-_k8q6b91/bin/LogosBasecamp (bundle: LogosBasecamp.app/Contents/MacOS/LogosBasecamp)\n", "note": ""}]}, {"md": "## Step 5: Launch it headless and watch it\n\n`QT_QPA_PLATFORM=offscreen` renders to an offscreen buffer, so no display\nis needed. The app gets the populated user directory and 45 seconds to\nboot, load its plugins, and settle.", "execs": []}, {"md": "### 5.1 Launch\n\nLaunched through its real path rather than the `./bin` symlink:\nBasecamp locates its embedded modules and plugins relative to its own\nexecutable, and on macOS that resolution follows the invocation path,\nso a symlinked launch would look for them beside the symlink.\n\n```bash\nQT_QPA_PLATFORM=offscreen LogosBasecamp --user-dir ./testdata > basecamp.log &\n```", "execs": [{"kind": "run", "cmd": "APP=\"$(\"$RELEASE_SET_DIR/doctests/release-set.sh\" path LogosBasecamp)\"\necho \"launching $APP\"\nQT_QPA_PLATFORM=offscreen \"$APP\" --user-dir ./testdata \\\n  > basecamp.log 2>&1 &\necho $! > basecamp.pid\nsleep 45\n", "status": "pass", "exit_code": 0, "output": "launching /private/tmp/doctest-test-_k8q6b91/.fetch/logos-basecamp/LogosBasecamp.app/Contents/MacOS/LogosBasecamp\n", "note": ""}]}, {"md": "### 5.2 Check it is still alive and clean\n\nThree assertions: the process survived the boot, the QML engine did not\nfail to load a component, and no plugin failed to load. A shipping\nbinary that starts and stays up on a full user-dir is what this spec\nexists to prove.\n\n```bash\nkill -0 \"$(cat basecamp.pid)\"          # still running?\ngrep -F \"Cannot load library\" basecamp.log   # nothing failed to load?\n```\n\nThe shipped artifact boots on a user directory built entirely from this\nrelease set. For assertions about what the UI actually *shows*, see\n[`basecamp-ui`](basecamp-ui.md) \u2014 same commit, inspector enabled.", "execs": [{"kind": "run", "cmd": "set +e\npid=\"$(cat basecamp.pid)\"\nfailed=0\n\nif kill -0 \"$pid\" 2>/dev/null; then\n  echo \"process alive after boot\"\nelse\n  echo \"FAIL: process exited during boot\"; failed=1\nfi\n\nfor pattern in \\\n  \"QQmlApplicationEngine failed\" \\\n  \"Cannot load library\" \\\n  \"is not a type\" \\\n  \"Failed to load plugin\"\ndo\n  if grep -qF \"$pattern\" basecamp.log; then\n    echo \"FAIL: log contains: $pattern\"\n    grep -F \"$pattern\" basecamp.log | head -3\n    failed=1\n  fi\ndone\n\nkill \"$pid\" 2>/dev/null || true\nsleep 2\n\necho \"--- last 20 log lines ---\"\ntail -20 basecamp.log\n\nif [ \"$failed\" -eq 0 ]; then echo \"smoke OK\"; else echo \"smoke FAILED\"; fi\nexit \"$failed\"\n", "status": "pass", "exit_code": 0, "output": "process alive after boot\n--- last 20 log lines ---\nqrc:/qt/qml/Basecamp/Settings/Basecamp/Settings/UiModulesTab.qml:94: TypeError: Cannot read property 'uiModules' of null\nqrc:/qt/qml/Basecamp/Settings/Basecamp/Settings/UiModulesTab.qml:48: TypeError: Cannot read property 'modulesLoading' of null\nqrc:/qt/qml/Basecamp/Settings/Basecamp/Settings/DashboardView.qml:59: TypeError: Cannot read property 'buildCommits' of null\nqrc:/qt/qml/Basecamp/Settings/Basecamp/Settings/DashboardView.qml:39: TypeError: Cannot read property 'isPortableBuild' of null\nqrc:/qt/qml/Basecamp/Settings/Basecamp/Settings/DashboardView.qml:32: TypeError: Cannot read property 'buildVersion' of null\nqrc:/qt/qml/Basecamp/Settings/Basecamp/Settings/DashboardView.qml:33: TypeError: Cannot read property 'buildVersion' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/ContentViews.qml:47: TypeError: Cannot read property 'uiAppsProxy' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/ContentViews.qml:48: TypeError: Cannot read property 'repositories' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/ContentViews.qml:49: TypeError: Cannot read property 'appsLoading' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/ContentViews.qml:42: TypeError: Cannot read property 'currentActiveSectionIndex' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/OverlayDialogs.qml:114: TypeError: Cannot read property 'requiredPackagesModel' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/OverlayDialogs.qml:47: TypeError: Cannot call method 'displayNameFor' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/OverlayDialogs.qml:47: TypeError: Cannot call method 'displayNameFor' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/OverlayDialogs.qml:47: TypeError: Cannot call method 'displayNameFor' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/OverlayDialogs.qml:47: TypeError: Cannot call method 'displayNameFor' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/OverlayDialogs.qml:47: TypeError: Cannot call method 'displayNameFor' of null\nqrc:/qt/qml/Basecamp/Shell/Basecamp/Shell/OverlayDialogs.qml:47: TypeError: Cannot call method 'displayNameFor' of null\n[LogosObject] Destroying RemoteLogosObject 0\n[LogosObject] Destroying RemoteLogosObject 0\nMainUIPlugin destroyed\nsmoke OK\n", "note": ""}]}]}]}</script>
+<script>
+  const DATA = JSON.parse(document.getElementById("report-data").textContent);
+  if (window.marked) { marked.setOptions({ gfm: true, breaks: false }); }
+  const mdToHtml = (s) => window.marked ? marked.parse(s || "") : ("<pre>" + (s || "") + "</pre>");
+
+  const sum = DATA.summary;
+  document.getElementById("summary").innerHTML =
+    `<span class="pill pass">${sum.passed} passed</span> ` +
+    (sum.failed ? `<span class="pill fail">${sum.failed} failed</span> ` : "") +
+    (sum.skipped ? `<span class="pill skip">${sum.skipped} skipped</span>` : "");
+
+  const picker = document.getElementById("picker");
+  DATA.tutorials.forEach((t, i) => {
+    const o = document.createElement("option");
+    o.value = i; o.textContent = t.meta.name; picker.appendChild(o);
+  });
+
+  function execHtml(e) {
+    const badge = `<span class="badge ${e.status}">${e.status.toUpperCase()}</span>`;
+    const kind = `<span class="kind">${e.kind}${e.exit_code !== undefined ? " · exit " + e.exit_code : ""}</span>`;
+    let h = `<div class="exec"><div class="exec-head">${badge}${kind}</div>`;
+    if (e.note) h += `<div class="note">${escapeHtml(e.note)}</div>`;
+    if (e.cmd) h += `<pre class="cmd">${escapeHtml(e.cmd)}</pre>`;
+    const out = (e.output || "").trim();
+    if (out) {
+      const long = out.split("\n").length > 12;
+      if (long) {
+        h += `<details><summary>output (${out.split("\n").length} lines)</summary><pre class="output">${escapeHtml(out)}</pre></details>`;
+      } else {
+        h += `<pre class="output">${escapeHtml(out)}</pre>`;
+      }
+    }
+    h += `</div>`;
+    return h;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  }
+
+  function render(idx) {
+    const t = DATA.tutorials[idx];
+    const main = document.getElementById("main");
+    main.innerHTML = "";
+    const h = document.createElement("div");
+    h.className = "tutorial-title";
+    h.textContent = t.meta.name + "  —  " + t.meta.platform;
+    main.appendChild(h);
+
+    t.rows.forEach(row => {
+      const isStructural = row.execs.length === 0 &&
+        (/^#\s|^##\s/.test(row.md.trim()));
+      const div = document.createElement("div");
+      const hasExec = row.execs.length > 0;
+      const hasFail = row.execs.some(e => e.status === "fail");
+      div.className = "row" + (hasExec ? "" : (isStructural ? " section" : " preamble")) +
+        (hasFail ? " has-fail" : "");
+
+      const left = document.createElement("div");
+      left.className = "col left";
+      left.innerHTML = `<div class="md">${mdToHtml(row.md)}</div>`;
+      div.appendChild(left);
+
+      if (hasExec || !isStructural) {
+        const right = document.createElement("div");
+        right.className = "col right";
+        if (hasExec) {
+          right.innerHTML = `<div class="col-label">Executed</div>` +
+            row.execs.map(execHtml).join("");
+        } else {
+          right.innerHTML = `<div class="col-label">Executed</div>` +
+            `<div class="empty">No commands run for this step.</div>`;
+        }
+        div.appendChild(right);
+      }
+      main.appendChild(div);
+    });
+
+    addAnchors(main, slug(t.meta.name));
+  }
+
+  function slug(s) {
+    return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  }
+
+  // Octicon "link" — the same glyph GitHub puts next to markdown headings.
+  const LINK_ICON =
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d=' +
+    '"M7.775 3.275a.75.75 0 0 0 1.06 1.06l1.25-1.25a2 2 0 1 1 2.83 2.83l-2.5 2.5a2 2 0 0 1-2.83 0 ' +
+    '.75.75 0 0 0-1.06 1.06 3.5 3.5 0 0 0 4.95 0l2.5-2.5a3.5 3.5 0 0 0-4.95-4.95l-1.25 1.25Zm-4.69 ' +
+    '9.64a2 2 0 0 1 0-2.83l2.5-2.5a2 2 0 0 1 2.83 0 .75.75 0 0 0 1.06-1.06 3.5 3.5 0 0 0-4.95 0l-2.5 ' +
+    '2.5a3.5 3.5 0 0 0 4.95 4.95l1.25-1.25a.75.75 0 0 0-1.06-1.06l-1.25 1.25a2 2 0 0 1-2.83 0Z"></path></svg>';
+
+  // Give every heading a stable slug id (deduplicated the way GitHub does, with
+  // -1/-2 suffixes) and a permalink whose href is "#<tutorial>/<heading>".
+  function addAnchors(container, tutSlug) {
+    const used = new Map();
+    const nodes = container.querySelectorAll(
+      ".tutorial-title, .md h1, .md h2, .md h3, .md h4, .md h5, .md h6"
+    );
+    nodes.forEach(node => {
+      const text = node.textContent.trim();
+      const isTitle = node.classList.contains("tutorial-title");
+      let href = "#" + tutSlug;
+      if (!isTitle) {
+        const base = slug(text) || "section";
+        const n = (used.get(base) || 0) + 1;
+        used.set(base, n);
+        node.id = n > 1 ? base + "-" + n : base;
+        href += "/" + node.id;
+      }
+      node.classList.add("heading-anchored");
+      const a = document.createElement("a");
+      a.className = "anchor";
+      a.href = href;
+      a.title = "Copy link to this section";
+      a.setAttribute("aria-label", "Permalink: " + text);
+      a.innerHTML = LINK_ICON;
+      node.insertBefore(a, node.firstChild);
+    });
+  }
+
+  let toastTimer = null;
+  function toast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("show"), 1600);
+  }
+
+  // navigator.clipboard needs a secure context; reports are often opened over
+  // file://, so fall back to the old execCommand path there.
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(
+        () => toast("Link copied"),
+        () => toast(text)
+      );
+      return;
+    }
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    toast(ok ? "Link copied" : text);
+  }
+
+  function scrollToId(id) {
+    if (!id) { window.scrollTo(0, 0); return; }
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.scrollIntoView({ block: "start" });
+    el.classList.remove("flash");
+    void el.offsetWidth;  // restart the animation on a repeat click
+    el.classList.add("flash");
+  }
+
+  document.addEventListener("click", ev => {
+    const a = ev.target.closest && ev.target.closest("a.anchor");
+    if (!a) return;
+    ev.preventDefault();
+    const href = a.getAttribute("href");
+    copyText(location.href.split("#")[0] + href);
+    if (location.hash === href) scrollToId(a.parentNode.id);
+    else location.hash = href;  // hashchange scrolls
+  });
+
+  // "#<tutorial>" (name, slug, or index) optionally followed by "/<heading>".
+  function parseHash() {
+    const raw = decodeURIComponent(location.hash.replace(/^#/, ""));
+    if (!raw) return { idx: 0, frag: "" };
+    const cut = raw.indexOf("/");
+    const tut = cut >= 0 ? raw.slice(0, cut) : raw;
+    const frag = cut >= 0 ? raw.slice(cut + 1) : "";
+    if (/^\d+$/.test(tut) && +tut < DATA.tutorials.length) return { idx: +tut, frag };
+    const i = DATA.tutorials.findIndex(
+      t => slug(t.meta.name) === tut || t.meta.name === tut
+    );
+    if (i >= 0) return { idx: i, frag };
+    // No tutorial matched: treat a bare hash as a heading in the current one.
+    return { idx: currentIdx >= 0 ? currentIdx : 0, frag: cut >= 0 ? frag : raw };
+  }
+
+  let currentIdx = -1;
+  function show(idx, frag) {
+    if (idx !== currentIdx) {
+      picker.value = idx;
+      render(idx);
+      currentIdx = idx;
+    }
+    if (frag) requestAnimationFrame(() => scrollToId(frag));
+  }
+  picker.addEventListener("change", () => {
+    location.hash = slug(DATA.tutorials[+picker.value].meta.name);
+    show(+picker.value);
+  });
+  window.addEventListener("hashchange", () => {
+    const h = parseHash();
+    show(h.idx, h.frag);
+  });
+  const initial = parseHash();
+  show(initial.idx, initial.frag);
+  // Inlined screenshots have no intrinsic size until decoded, so the first
+  // scroll can land short; re-anchor once everything has loaded.
+  if (initial.frag) {
+    window.addEventListener("load", () => scrollToId(initial.frag), { once: true });
+  }
+</script>
+</body>
+</html>
