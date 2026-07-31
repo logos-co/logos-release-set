@@ -225,7 +225,7 @@ sections:
             # "LEZ Module".
             - name: "The release set's core modules are listed"
               action: wait_for
-              texts: ["Storage Module", "Chat Module", "blockchain_module", "LEZ Module"]
+              texts: ["Storage Module", "Chat Module", "blockchain_module", "LEZ Module", "libp2p Networking"]
               timeout: 60000
               text: "The core modules are present too, so the dependencies the UI apps need are really loaded."
               screenshot: "basecamp-core-modules-list.png"

@@ -26,6 +26,7 @@
     { "name": "delivery_module",      "version": "CHANGE-ME" },
     { "name": "chat_module",          "version": "CHANGE-ME" },
     { "name": "lez_indexer_module",   "version": "CHANGE-ME" },
+    { "name": "libp2p_module",        "version": "CHANGE-ME" },
     { "name": "logos_execution_zone", "version": "CHANGE-ME" },
     { "name": "openmetrics",          "version": "CHANGE-ME" },
     { "name": "storage_module",       "version": "CHANGE-ME" }
