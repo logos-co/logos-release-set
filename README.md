@@ -45,6 +45,17 @@ $EDITOR release-set.json
 python3 scripts/resolve.py release-set.json --check   # fails while any pin is CHANGE-ME
 ```
 
+The file is laid out for reading — one entry per line, columns aligned — and
+`json.dump` cannot reproduce that: it reflows every entry onto four lines, so a
+two-line pin bump becomes a ninety-line diff. Any script that edits this file
+should hand it back to the formatter, which sorts entries by name and restores
+the layout. CI rejects a file that is not already canonical.
+
+```bash
+python3 scripts/format-release-set.py           # rewrite in place
+python3 scripts/format-release-set.py --check   # what CI runs
+```
+
 ## The output: `release-set.lock.json`
 
 `scripts/resolve.py` turns each pin into full provenance. Every versioned

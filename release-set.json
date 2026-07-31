@@ -13,8 +13,8 @@
   "apps": [
     { "name": "logos-basecamp",           "repo": "logos-co/logos-basecamp",           "releaseTag": "CHANGE-ME" },
     { "name": "logos-logoscore-cli",      "repo": "logos-co/logos-logoscore-cli",      "releaseTag": "CHANGE-ME" },
-    { "name": "logos-package-manager",    "repo": "logos-co/logos-package-manager",    "releaseTag": "CHANGE-ME" },
-    { "name": "logos-package-downloader", "repo": "logos-co/logos-package-downloader", "releaseTag": "CHANGE-ME" }
+    { "name": "logos-package-downloader", "repo": "logos-co/logos-package-downloader", "releaseTag": "CHANGE-ME" },
+    { "name": "logos-package-manager",    "repo": "logos-co/logos-package-manager",    "releaseTag": "CHANGE-ME" }
   ],
 
   "devUtils": [
@@ -23,8 +23,8 @@
 
   "modules": [
     { "name": "blockchain_module",    "version": "CHANGE-ME" },
-    { "name": "delivery_module",      "version": "CHANGE-ME" },
     { "name": "chat_module",          "version": "CHANGE-ME" },
+    { "name": "delivery_module",      "version": "CHANGE-ME" },
     { "name": "lez_indexer_module",   "version": "CHANGE-ME" },
     { "name": "libp2p_module",        "version": "CHANGE-ME" },
     { "name": "logos_execution_zone", "version": "CHANGE-ME" },

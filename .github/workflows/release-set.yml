@@ -46,6 +46,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Catches a release-set.json that some script reflowed — the data can be
+      # perfectly correct while the diff is unreadable. Cheap, and it fails
+      # before anything is downloaded.
+      - name: Check release-set.json is canonically formatted
+        run: python3 scripts/format-release-set.py --check
+
       - name: Resolve every pin
         id: resolve
         env:
