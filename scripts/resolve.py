@@ -44,17 +44,29 @@ PLACEHOLDER = "CHANGE-ME"
 
 API = "https://api.github.com"
 
-# The three platforms a release set is validated on.
+# The three platforms a release set is VALIDATED on. Windows is deliberately
+# absent: there is no Windows CI job yet, so listing it here would report every
+# component as a coverage gap and assert a guarantee nothing currently checks.
 PLATFORMS = ["linux-x86_64", "linux-arm64", "macos-arm64"]
+
+# Platforms whose artifacts we can RECOGNISE. Wider than PLATFORMS on purpose --
+# a Windows asset must be labelled correctly the moment one is published, long
+# before Windows becomes a release gate. Promote to PLATFORMS when Windows CI
+# exists.
+KNOWN_PLATFORMS = PLATFORMS + ["windows-x86_64"]
 
 # Catalog .lgx variant name per platform (manifest `main` keys).
 LGX_VARIANT = {
     "linux-x86_64": "linux-amd64",
     "linux-arm64": "linux-arm64",
     "macos-arm64": "darwin-arm64",
+    # lgpm computes exactly this and has no alias fallback for it, so the
+    # spelling is a contract, not a preference (package_manager_lib.cpp
+    # currentPlatformVariant / platformVariantsToTry).
+    "windows-x86_64": "windows-x86_64",
 }
 
-PLATFORM_ORDER = {name: i for i, name in enumerate(PLATFORMS)}
+PLATFORM_ORDER = {name: i for i, name in enumerate(KNOWN_PLATFORMS)}
 
 
 # --------------------------------------------------------------------------
@@ -201,7 +213,7 @@ def asset_rank(name):
 
 
 def classify_asset(name):
-    """Map a release-asset filename to one of PLATFORMS, or None.
+    """Map a release-asset filename to one of KNOWN_PLATFORMS, or None.
 
     Handles both naming schemes in use: the CLI tools' `<tool>-<arch>-<os>.tar.gz`
     and Basecamp's `LogosBasecamp-Desktop-v<ver>-<sha>-<arch>.{AppImage,dmg}`.
@@ -213,9 +225,19 @@ def classify_asset(name):
     # and without this a linux-arm64 runner would download a Mach-O bundle.
     is_mac = (".dmg" in low or "macos" in low or "darwin" in low
               or ".app.tar" in low or ".app.zip" in low or low.endswith(".pkg"))
+    # Match "windows", never a bare "win": "darwin" CONTAINS "win", so the short
+    # form would classify every macOS asset as Windows.
+    is_windows = ("windows" in low or "win64" in low or "mingw" in low
+                  or low.endswith(".exe") or low.endswith(".msi"))
     is_arm = "aarch64" in low or "arm64" in low
     is_x86 = "x86_64" in low or "amd64" in low
 
+    # Windows is tested BEFORE the bare-architecture fallbacks. Otherwise
+    # `logosctl-x86_64-windows.zip` matches is_x86 and is handed to a Linux
+    # runner as `linux-x86_64` — a silent mislabel, not a drop, and the same
+    # shape of bug as nix-bundle-lgx calling a cross build "linux-amd64".
+    if is_windows:
+        return None if is_arm else "windows-x86_64"
     if is_mac:
         return "macos-arm64" if is_arm else None
     if is_arm:
