@@ -61,6 +61,8 @@ PLATFORM_LABELS = {
     "linux-x86_64": "linux x86_64",
     "linux-arm64": "linux arm64",
     "macos-arm64": "macOS arm64",
+    # Recognised but not yet a release gate — see KNOWN_PLATFORMS in resolve.py.
+    "windows-x86_64": "windows x86_64",
 }
 
 STATUS_MARK = {"passed": "✅", "failed": "❌", "skipped": "⏭️"}
