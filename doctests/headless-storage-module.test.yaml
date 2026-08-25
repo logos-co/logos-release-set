@@ -12,8 +12,7 @@ intro: |
   `storage_module` is pulled from the module catalog with `lgpd` at the pinned
   version and installed with `lgpm`, checksum-verified against the catalog
   index. The initialization follows the
-  [Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide),
-  adjusted for a CI host with no public IP.
+  [Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide).
 
   Then it goes two steps further than "the module loads". It builds a small
   **probe module** with the `logos-module-builder` release the set pins, and
@@ -392,11 +391,9 @@ sections:
     text: |
       This is the node operator guide's storage step. Its config is reproduced
       key for key — `data-dir`, `log-level`, `listen-ip`, `listen-port`,
-      `disc-port` and `network: "logos.test"`, the key that selects the testnet
-      — with exactly one deliberate change: the guide sets
-      `"nat": "extip:<public-ip>"`, which a CI runner (no public IP, no inbound
-      ports) cannot satisfy, so we use `"nat": "none"`. The one addition is
-      `log-file`, so the node's log lands somewhere the doc-test can show you.
+      `disc-port` and `network: "logos.test"`, the key that selects the testnet.
+      The one addition is `log-file`, so the node's log lands somewhere the
+      doc-test can show you.
 
       `init` is synchronous; `start` completes asynchronously and announces
       itself with a `storageStart` event, so we begin watching before calling it.
@@ -412,7 +409,6 @@ sections:
             "listen-ip": "0.0.0.0",
             "listen-port": 8091,
             "disc-port": 8090,
-            "nat": "none",
             "network": "logos.test"
           }
           EOF
@@ -425,7 +421,6 @@ sections:
             "listen-ip": "0.0.0.0",
             "listen-port": 8091,
             "disc-port": 8090,
-            "nat": "none",
             "network": "logos.test"
           }
         check_file: "config.json"
