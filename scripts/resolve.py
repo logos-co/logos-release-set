@@ -19,7 +19,7 @@ submodule. So:
 
 The module-name -> submodule-directory mapping is NOT guessed from naming
 conventions (the real directories include `logos-execution-zone-module` for
-package `logos_execution_zone`, and `lez-indexer-module` with no `logos-`
+package `lez_core`, and `lez-indexer-module` with no `logos-`
 prefix at all). It is read from each submodule's own `metadata.json` at its
 pinned commit, which is the source of truth.
 
@@ -466,12 +466,16 @@ def resolve_catalog_package(name, version, catalog_repo, index):
 # --------------------------------------------------------------------------
 
 def check_version_shape(version):
-    """The release set's own version must be A.B.C.D — it becomes the tag."""
+    """Validate the release-set SemVer and its release-set commit identifier."""
     if version == PLACEHOLDER:
         return None
-    if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", version or ""):
-        return (f"version {version!r} is not of the form A.B.C.D "
-                "(four dot-separated numbers, e.g. 0.2.1.0)")
+    # SemVer's numeric identifiers must not carry leading zeroes. The prerelease
+    # number distinguishes successive release sets for a component version, and
+    # the build identifier records the short commit hash of the release set.
+    if not re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+                        r"-r\.(?:0|[1-9]\d*)\+[0-9a-f]{7}", version or ""):
+        return (f"version {version!r} is not of the form X.Y.Z-r.N+<short-hash> "
+                "(for example 0.2.1-r.1+5ecc750)")
     return None
 
 

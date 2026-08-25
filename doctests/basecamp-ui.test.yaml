@@ -221,7 +221,7 @@ sections:
 
             # Exact labels again, from the same `displayName || name` rule: at
             # these pins storage_module and chat_module ship display names,
-            # blockchain_module does not, and logos_execution_zone renders as
+            # blockchain_module does not, and lez_core renders as
             # "LEZ Module".
             - name: "The release set's core modules are listed"
               action: wait_for

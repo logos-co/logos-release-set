@@ -22,21 +22,21 @@
   ],
 
   "modules": [
-    { "name": "blockchain_module",    "version": "CHANGE-ME" },
-    { "name": "chat_module",          "version": "CHANGE-ME" },
-    { "name": "delivery_module",      "version": "CHANGE-ME" },
-    { "name": "lez_indexer_module",   "version": "CHANGE-ME" },
-    { "name": "libp2p_module",        "version": "CHANGE-ME" },
-    { "name": "logos_execution_zone", "version": "CHANGE-ME" },
-    { "name": "openmetrics",          "version": "CHANGE-ME" },
-    { "name": "storage_module",       "version": "CHANGE-ME" }
+    { "name": "blockchain_module",  "version": "CHANGE-ME" },
+    { "name": "chat_module",        "version": "CHANGE-ME" },
+    { "name": "delivery_module",    "version": "CHANGE-ME" },
+    { "name": "lez_core",           "version": "CHANGE-ME" },
+    { "name": "lez_indexer_module", "version": "CHANGE-ME" },
+    { "name": "libp2p_module",      "version": "CHANGE-ME" },
+    { "name": "openmetrics",        "version": "CHANGE-ME" },
+    { "name": "storage_module",     "version": "CHANGE-ME" }
   ],
 
   "uiApps": [
-    { "name": "blockchain_ui",        "version": "CHANGE-ME" },
-    { "name": "chat_ui",              "version": "CHANGE-ME" },
-    { "name": "lez_explorer_ui",      "version": "CHANGE-ME" },
-    { "name": "lez_wallet_ui",        "version": "CHANGE-ME" },
-    { "name": "storage_ui",           "version": "CHANGE-ME" }
+    { "name": "blockchain_ui",      "version": "CHANGE-ME" },
+    { "name": "chat_ui",            "version": "CHANGE-ME" },
+    { "name": "lez_explorer_ui",    "version": "CHANGE-ME" },
+    { "name": "lez_wallet_ui",      "version": "CHANGE-ME" },
+    { "name": "storage_ui",         "version": "CHANGE-ME" }
   ]
 }

@@ -27,20 +27,21 @@ Four groups, two pinning styles:
 | `modules` | catalog **version** | `core` modules — install to `--modules-dir` |
 | `uiApps` | catalog **version** | `ui_qml` plugins — install to `--ui-plugins-dir` |
 
-Plus `version`, the release set's own `A.B.C.D` identifier, which becomes the
-release tag (`v0.2.1.0`).
+Plus `version`, the release set's own SemVer identifier:
+`X.Y.Z-r.<release-number>+<release-set-commit-short-hash>`. It becomes the
+release tag (for example, `v0.2.1-r.1+5ecc750`).
 
 `modules` and `uiApps` carry **no repository** — they are catalog packages
 identified by `(name, version)`, and the resolver discovers where they came
 from. Note these are *module* names, not repo names: the LEZ module is published
-as `logos_execution_zone`, and two entries (`lez_indexer_module`,
+as `lez_core`, and two entries (`lez_indexer_module`,
 `lez_explorer_ui`) have no repo in the main workspace at all.
 
 **`main` holds `CHANGE-ME` placeholders and never publishes.** To cut a release
 set, branch, fill in the versions, and run the workflow on that branch.
 
 ```bash
-git switch -c release/0.2.1.0
+git switch -c release/0.2.1-r.1+5ecc750
 $EDITOR release-set.json
 python3 scripts/resolve.py release-set.json --check   # fails while any pin is CHANGE-ME
 ```
@@ -75,7 +76,7 @@ in `logos-modules-release` at the package's release tag:
 
 The module-name → submodule-directory mapping is read from each submodule's own
 `metadata.json` at its pinned commit, never inferred from naming conventions —
-`logos_execution_zone` lives in `logos-execution-zone-module`, and the LEZ
+`lez_core` lives in `logos-execution-zone-module`, and the LEZ
 directories drop the `logos-` prefix entirely.
 
 `sha256` is best-effort: the catalog publishes one for every `.lgx`, GitHub
