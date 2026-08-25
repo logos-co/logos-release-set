@@ -27,9 +27,10 @@ Four groups, two pinning styles:
 | `modules` | catalog **version** | `core` modules — install to `--modules-dir` |
 | `uiApps` | catalog **version** | `ui_qml` plugins — install to `--ui-plugins-dir` |
 
-Plus `version`, the release set's own SemVer identifier:
-`X.Y.Z-r.<release-number>+<release-set-commit-short-hash>`. It becomes the
-release tag (for example, `v0.2.1-r.1+5ecc750`).
+Plus `version`, the release set's base SemVer identifier:
+`X.Y.Z-r.<release-number>` (for example, `0.2.1-r.1`). CI appends
+`+<release-set-commit-short-hash>` from the exact commit it checked out, so the
+published release tag becomes, for example, `v0.2.1-r.1+5ecc750`.
 
 `modules` and `uiApps` carry **no repository** — they are catalog packages
 identified by `(name, version)`, and the resolver discovers where they came
@@ -41,7 +42,7 @@ as `lez_core`, and two entries (`lez_indexer_module`,
 set, branch, fill in the versions, and run the workflow on that branch.
 
 ```bash
-git switch -c release/0.2.1-r.1+5ecc750
+git switch -c release/0.2.1-r.1
 $EDITOR release-set.json
 python3 scripts/resolve.py release-set.json --check   # fails while any pin is CHANGE-ME
 ```
@@ -85,7 +86,8 @@ than fabricated, and nothing is downloaded just to hash it.
 
 ```bash
 export GITHUB_TOKEN=...        # the API allowance without one is 60 req/hour
-python3 scripts/resolve.py release-set.json -o release-set.lock.json
+python3 scripts/resolve.py release-set.json -o release-set.lock.json \
+  --release-set-commit "$(git rev-parse HEAD)"
 ```
 
 ## The proof: `doctests/`

@@ -466,17 +466,26 @@ def resolve_catalog_package(name, version, catalog_repo, index):
 # --------------------------------------------------------------------------
 
 def check_version_shape(version):
-    """Validate the release-set SemVer and its release-set commit identifier."""
+    """Validate the base SemVer the release branch declares."""
     if version == PLACEHOLDER:
         return None
-    # SemVer's numeric identifiers must not carry leading zeroes. The prerelease
-    # number distinguishes successive release sets for a component version, and
-    # the build identifier records the short commit hash of the release set.
+    # SemVer's numeric identifiers must not carry leading zeroes. CI appends the
+    # build identifier (`+<short Git SHA>`) from the commit it checked out, so
+    # the release-set file itself declares only the reproducible base version.
     if not re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
-                        r"-r\.(?:0|[1-9]\d*)\+[0-9a-f]{7}", version or ""):
-        return (f"version {version!r} is not of the form X.Y.Z-r.N+<short-hash> "
-                "(for example 0.2.1-r.1+5ecc750)")
+                        r"-r\.(?:0|[1-9]\d*)", version or ""):
+        return (f"version {version!r} is not of the form X.Y.Z-r.N "
+                "(for example 0.2.1-r.1)")
     return None
+
+
+def release_version(base_version, release_set_commit):
+    """Add CI's immutable release-set commit identity to a base SemVer."""
+    if not re.fullmatch(r"[0-9a-f]{7,40}", release_set_commit or ""):
+        return (None,
+                "release-set commit must be a 7–40 character lowercase Git SHA; "
+                f"got {release_set_commit!r}")
+    return f"{base_version}+{release_set_commit[:7]}", None
 
 
 def find_placeholders(spec):
@@ -519,13 +528,14 @@ def platform_coverage(lock):
     return gaps
 
 
-def resolve(spec, generated_at=None):
+def resolve(spec, release_set_commit, generated_at=None):
     catalog_repo = spec["catalog"]["repo"]
     logos_repo, index_url, index = load_catalog_index(spec["catalog"]["logosRepoUrl"])
 
     lock = {
         "schemaVersion": 1,
-        "version": spec["version"],
+        "version": release_version(spec["version"], release_set_commit)[0],
+        "releaseSetCommit": release_set_commit,
         "name": spec.get("name"),
         "displayName": spec.get("displayName"),
         "description": spec.get("description"),
@@ -578,6 +588,9 @@ def main():
     parser.add_argument("--generated-at", default=None,
                         help="ISO timestamp to stamp into the lock (CI supplies this; "
                              "omitted by default so output is byte-stable)")
+    parser.add_argument("--release-set-commit", default=None,
+                        help="Git SHA of the checked-out release set; CI appends its "
+                             "first seven characters to the release version")
     args = parser.parse_args()
 
     with open(args.spec, encoding="utf-8") as handle:
@@ -602,8 +615,14 @@ def main():
         print(f"{args.spec}: pins OK", file=sys.stderr)
         return 0
 
+    resolved_version, commit_error = release_version(spec["version"],
+                                                     args.release_set_commit)
+    if commit_error:
+        print(f"error: {commit_error}", file=sys.stderr)
+        return 1
+
     try:
-        lock = resolve(spec, generated_at=args.generated_at)
+        lock = resolve(spec, args.release_set_commit, generated_at=args.generated_at)
     except GitHubError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
