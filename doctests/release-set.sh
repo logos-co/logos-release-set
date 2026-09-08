@@ -297,10 +297,12 @@ cmd_ctl_install() {
 
   mkdir -p packages
   echo "==> logosctl package download $pkg --version $PKG_VERSION"
+  # --json prints the download record itself -- {"name","path","version"} --
+  # not an RPC envelope around it, so `path` is top level.
   out="$("$BIN/logosctl" --config-dir "$SESSION" package download "$pkg" \
            --version "$PKG_VERSION" -o packages --json)"
   file="$(printf '%s' "$out" |
-          python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["path"])')" ||
+          python3 -c 'import json,sys; print(json.load(sys.stdin)["path"])')" ||
     die "no .lgx path in: $out"
 
   verify_lgx "$pkg" "$file"
