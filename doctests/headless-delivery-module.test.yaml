@@ -5,9 +5,9 @@ release: ""
 intro: |
   This doc-test validates the `delivery_module` pinned by
   [`release-set.json`](../release-set.json), using only released artifacts:
-  `logoscore`, `lgpd` and `lgpm` downloaded from their GitHub releases at the
-  pinned tags, and `delivery_module` pulled from the module catalog at the
-  pinned version and checksum-verified before install.
+  `logosctl` — the runtime and the package manager in one — downloaded from its
+  GitHub release at the pinned tag, and `delivery_module` pulled from the module
+  catalog at the pinned version and checksum-verified before install.
 
   Initialization follows the
   [Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide),
@@ -27,7 +27,7 @@ what_you_build: "The pinned `delivery_module`, installed from the catalog, start
 
 what_you_learn:
   - How a release set pins tools by release tag and modules by catalog version
-  - How to install an exact module version with `lgpd download --version` + `lgpm`
+  - How to install an exact module version with `logosctl package download --version`
   - How to create and start a delivery node headlessly, following the node operator guide
   - How to subscribe to a dependency's typed events from another module
   - Why a probe subscribes before the lifecycle call that fires the event
@@ -35,7 +35,7 @@ what_you_learn:
 
 prerequisites:
   - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
-  - "**Nix** with flakes enabled — used only to build the probe module; the tools and modules under test come from released binaries."
+  - "**Nix** with flakes enabled — used only to build the probe module; the tool and modules under test come from released binaries."
   - "**`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API)."
 
 sections:
@@ -51,63 +51,85 @@ sections:
         code_block: "./doctests/release-set.sh lock"
         check_file: "release-set.lock.json"
 
-  - title: "Fetch the pinned tools"
+  - title: "Fetch the pinned runtime"
     step: true
     text: |
-      Downloaded at the tags the release set pins. Linux artifacts are AppImages,
-      which we extract rather than mount — CI runners have no FUSE.
+      `logosctl` is the headless runtime and the package manager in one — it
+      bundles `package_manager` and `package_downloader`, so one artifact does
+      the whole job. Downloaded at the tag the release set pins. The Linux
+      artifact is an AppImage, which we extract rather than mount — CI runners
+      have no FUSE.
+
+      The release publishes the older `logoscore` alongside it, so the fetch
+      names the binary it wants rather than taking whichever asset happens to
+      match the platform.
     steps:
-      - title: "Fetch logoscore, lgpd and lgpm"
-        run: |
-          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logoscore
-          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-downloader lgpd
-          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
-        code_block: |
-          ./doctests/release-set.sh fetch logos-logoscore-cli logoscore
-          ./doctests/release-set.sh fetch logos-package-downloader lgpd
-          ./doctests/release-set.sh fetch logos-package-manager lgpm
-        check_file: "bin/logoscore"
-      - title: "Seed the runtime's own modules"
+      - title: "Fetch logosctl"
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logosctl'
+        code_block: "./doctests/release-set.sh fetch logos-logoscore-cli logosctl"
+        check_file: "bin/logosctl"
+
+  - title: "Start a session"
+    step: true
+    text: |
+      Everything `logosctl` owns — installed modules, catalogs, trusted keys,
+      logs — lives in one **session** directory, and `--config-dir` picks which.
+      Pointing it at `./session` keeps this doc-test out of `~/.logosctl`.
+
+      The daemon starts *before* anything is installed: package commands are
+      served by the bundled `package_manager`, which lives inside the running
+      daemon, and the daemon re-scans its module directories after every
+      install. `capability_module` — the auth handshake every load needs — is
+      bundled beside the binary too, so nothing has to be seeded by hand.
+    steps:
+      - title: "Start the daemon"
         text: |
-          `logoscore` ships `capability_module` — the auth handshake every
-          `load-module` needs — inside its bundle, and finds it relative to its
-          own executable. We run it through `./bin/logoscore`, and on macOS that
-          lookup follows the *symlink* path rather than the bundle, so the module
-          would never be found and every load would stall then fail. Copying the
-          bundled modules into the directory we hand to `-m` removes the
-          dependency on that resolution entirely.
-        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" seed-modules logos-logoscore-cli'
-        code_block: "cp -RL <logoscore-bundle>/modules/. ./modules/"
-        check_file: "modules/capability_module"
+          `--detach` is not `&`. Backgrounding returns before the transports
+          have bound; `--detach` returns only once the daemon has published its
+          state file and is answering commands.
+        run: "./bin/logosctl --config-dir ./session daemon start --detach"
+        code_block: "logosctl --config-dir ./session daemon start --detach"
+      - title: "Confirm it is up"
+        run: "./bin/logosctl --config-dir ./session daemon status"
+        code_block: "logosctl daemon status"
+        expect_contains:
+          - '"status":"running"'
+      - title: "Confirm where packages will come from"
+        text: |
+          The catalog `logosctl` enables by default is the same
+          `logos-modules-release` catalog `release-set.json` names.
+        run: "./bin/logosctl --config-dir ./session catalog ls"
+        code_block: "logosctl catalog ls"
+        expect_contains:
+          - "logos-co/logos-modules-release"
 
   - title: "Install the pinned delivery_module"
     step: true
     text: |
-      `lgpd download --version` matches the version exactly — no semver ranges —
-      so the release set gets precisely what it pinned. The helper verifies the
-      `.lgx` against the catalog's published `sha256` before installing it.
+      `package download --version` matches the version exactly — no semver
+      ranges — so the release set gets precisely what it pinned. Download and
+      install stay two steps rather than one `package install --version`: the
+      release set's claim is about a specific file, so the helper hashes the
+      `.lgx` against the catalog's published `sha256` before anything unpacks it.
     steps:
       - title: "Download, verify and install"
-        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" install delivery_module'
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" ctl-install delivery_module'
         code_block: |
-          lgpd download delivery_module --version <pinned> -o packages
-          lgpm --modules-dir ./modules install --file packages/delivery_module-*.lgx
+          logosctl package download delivery_module --version <pinned> -o packages
+          logosctl package install --file packages/delivery_module-*.lgx -y
         expect_contains:
           - "sha256 OK"
-          - "Installed to:"
+          - '"installed":['
       - title: "Install the metrics scraper too"
         text: |
-          `openmetrics` serves the `/metrics` endpoint later in this doc-test. It
-          is installed now, before the daemon starts, because the runtime scans
-          its module directories once at startup — anything installed afterwards
-          is invisible to it.
-        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" install openmetrics'
+          `openmetrics` serves the `/metrics` endpoint later in this doc-test.
+        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" ctl-install openmetrics'
         code_block: |
-          lgpd download openmetrics --version <pinned> -o packages
-          lgpm --modules-dir ./modules install --file packages/openmetrics-*.lgx
+          logosctl package download openmetrics --version <pinned> -o packages
+          logosctl package install --file packages/openmetrics-*.lgx -y
         expect_contains:
           - "sha256 OK"
-          - "Installed to:"
+          - '"installed":['
 
   - title: "Build a probe module with the pinned module-builder"
     step: true
@@ -305,44 +327,37 @@ sections:
         check_file: "probe/probe-lgx"
 
       - title: "Install the probe"
-        run: "./bin/lgpm --modules-dir ./modules --allow-unsigned install --file probe/probe-lgx/*.lgx"
-        code_block: "lgpm --modules-dir ./modules --allow-unsigned install --file probe/probe-lgx/*.lgx"
+        text: |
+          A path ending in `.lgx` is read as a file, so this never touches the
+          catalog. The probe is unsigned and installs anyway: the session's
+          `signature_policy` defaults to `warn`.
+        run: "./bin/logosctl --config-dir ./session package install --file probe/probe-lgx/*.lgx -y"
+        code_block: "logosctl package install --file probe/probe-lgx/*.lgx -y"
         expect_contains:
-          - "Installed to:"
+          - '"installed":['
 
-  - title: "Start the runtime and subscribe"
+  - title: "Load the modules and subscribe"
     step: true
     text: |
+      Everything installed into the running daemon, which re-scanned each time.
       Load both modules, then register the probe's subscription — before any
       lifecycle call, so nothing is missed.
     steps:
-      - title: "Start the daemon"
-        run: "sh -c './bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
-        code_block: "logoscore -D -m ./modules > logs.txt &"
-      - title: "Wait for it to come up"
-        text: |
-          The daemon loads `capability_module` before it publishes its client
-          config, so it is answerable a few seconds after launch — longer on a
-          loaded runner. Poll rather than guess at a sleep.
-        run: '"$RELEASE_SET_DIR/doctests/release-set.sh" wait-daemon 90'
-        code_block: "logoscore status"
-        expect_contains:
-          - '"status":"running"'
       - title: "Load delivery_module"
-        run: "./bin/logoscore load-module delivery_module"
-        code_block: "logoscore load-module delivery_module"
+        run: "./bin/logosctl --config-dir ./session module load delivery_module"
+        code_block: "logosctl module load delivery_module"
         expect_contains:
           - "delivery_module"
       - title: "Load the probe"
-        run: "./bin/logoscore load-module probe_delivery"
-        code_block: "logoscore load-module probe_delivery"
+        run: "./bin/logosctl --config-dir ./session module load probe_delivery"
+        code_block: "logosctl module load probe_delivery"
         expect_contains:
           - "probe_delivery"
       - title: "Subscribe"
-        run: "./bin/logoscore call probe_delivery subscribe"
-        code_block: "logoscore call probe_delivery subscribe"
+        run: "./bin/logosctl --config-dir ./session call probe_delivery subscribe"
+        code_block: "logosctl call probe_delivery subscribe"
         expect_contains:
-          # The value, not the envelope: logoscore wraps every successful call
+          # The value, not the envelope: logosctl wraps every successful call
           # in {"status":"ok",...}, so asserting a bare "ok" would pass even
           # when the subscription failed to register.
           - '"result":"ok"'
@@ -391,22 +406,22 @@ sections:
           }
         check_file: "delivery-config.json"
       - title: "createNode"
-        run: "./bin/logoscore call delivery_module createNode @delivery-config.json"
-        code_block: "logoscore call delivery_module createNode @delivery-config.json"
+        run: "./bin/logosctl --config-dir ./session call delivery_module createNode @delivery-config.json"
+        code_block: "logosctl call delivery_module createNode @delivery-config.json"
         expect_contains:
           - '"success":true'
       - title: "start"
-        run: "./bin/logoscore call delivery_module start"
-        code_block: "logoscore call delivery_module start"
+        run: "./bin/logosctl --config-dir ./session call delivery_module start"
+        code_block: "logosctl call delivery_module start"
         expect_contains:
           - '"success":true'
       - title: "Verify the node is up"
         run: |
-          ./bin/logoscore call delivery_module getNodeInfo Version
-          ./bin/logoscore call delivery_module getNodeInfo MyBoundPorts
+          ./bin/logosctl --config-dir ./session call delivery_module getNodeInfo Version
+          ./bin/logosctl --config-dir ./session call delivery_module getNodeInfo MyBoundPorts
         code_block: |
-          logoscore call delivery_module getNodeInfo Version
-          logoscore call delivery_module getNodeInfo MyBoundPorts
+          logosctl call delivery_module getNodeInfo Version
+          logosctl call delivery_module getNodeInfo MyBoundPorts
         expect_contains:
           # The success flag, not the mere presence of a result envelope — a
           # module answering success:false also prints a "result", which is
@@ -421,8 +436,8 @@ sections:
       to the probe.
     steps:
       - title: "The probe's own call"
-        run: "./bin/logoscore call probe_delivery nodeInfo Version"
-        code_block: "logoscore call probe_delivery nodeInfo Version"
+        run: "./bin/logosctl --config-dir ./session call probe_delivery nodeInfo Version"
+        code_block: "logosctl call probe_delivery nodeInfo Version"
         expect_contains:
           - '"result":"probe-call-ok'
       - title: "The event the probe caught"
@@ -435,12 +450,12 @@ sections:
         run: |
           out=""
           for i in $(seq 1 30); do
-            out="$(./bin/logoscore call probe_delivery lastNodeStarted 2>&1)"
+            out="$(./bin/logosctl --config-dir ./session call probe_delivery lastNodeStarted 2>&1)"
             case "$out" in *'"result":"success=true'*) break ;; esac
             sleep 2
           done
           printf '%s\n' "$out"
-        code_block: "logoscore call probe_delivery lastNodeStarted"
+        code_block: "logosctl call probe_delivery lastNodeStarted"
         expect_contains:
           # Not just "an event arrived" — the event the node emitted on a
           # successful start. An empty latch or a failed start both still fail
@@ -467,8 +482,8 @@ sections:
       implement.
     steps:
       - title: "Load the scraper"
-        run: "./bin/logoscore load-module openmetrics"
-        code_block: "logoscore load-module openmetrics"
+        run: "./bin/logosctl --config-dir ./session module load openmetrics"
+        code_block: "logosctl module load openmetrics"
         expect_contains:
           - "openmetrics"
       - title: "Point it at the delivery module"
@@ -483,13 +498,13 @@ sections:
               ]
             }
       - title: "Start the server"
-        run: "./bin/logoscore call openmetrics start @openmetrics.json"
-        code_block: "logoscore call openmetrics start @openmetrics.json"
+        run: "./bin/logosctl --config-dir ./session call openmetrics start @openmetrics.json"
+        code_block: "logosctl call openmetrics start @openmetrics.json"
         expect_contains:
           - '"result":1'
       - title: "Confirm it is serving"
-        run: "./bin/logoscore call openmetrics getInfo"
-        code_block: "logoscore call openmetrics getInfo"
+        run: "./bin/logosctl --config-dir ./session call openmetrics getInfo"
+        code_block: "logosctl call openmetrics getInfo"
         expect_contains:
           - '\"running\":true'
       - title: "Scrape /metrics"
@@ -503,8 +518,8 @@ sections:
           - 'module="delivery_module"'
           - "# EOF"
       - title: "Stop the server"
-        run: "./bin/logoscore call openmetrics stop"
-        code_block: "logoscore call openmetrics stop"
+        run: "./bin/logosctl --config-dir ./session call openmetrics stop"
+        code_block: "logosctl call openmetrics stop"
         expect_contains:
           - '"result":1'
 
@@ -515,11 +530,11 @@ sections:
       - title: "Stop"
         run: |
           trap '' TERM
-          ./bin/logoscore stop || true
+          ./bin/logosctl --config-dir ./session daemon stop || true
           true
       - run: "sleep 2"
       - title: "Confirm"
-        run: "./bin/logoscore status || true"
-        code_block: "logoscore status"
+        run: "./bin/logosctl --config-dir ./session daemon status || true"
+        code_block: "logosctl daemon status"
         expect_contains:
           - '"status":"not_running"'

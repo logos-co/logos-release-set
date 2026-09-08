@@ -194,9 +194,9 @@ def render(lock):
         "---",
         "",
         f"Modules and UI apps are installed from "
-        f"[{lock['catalog']['repo']}]({lock['catalog']['repoUrl']}) with `lgpd` "
-        f"and `lgpm`. The source commit shown for each is the submodule gitlink "
-        f"the catalog release was built from.",
+        f"[{lock['catalog']['repo']}]({lock['catalog']['repoUrl']}) with "
+        f"`logosctl` (or `lgpd` and `lgpm`). The source commit shown for each "
+        f"is the submodule gitlink the catalog release was built from.",
     ]
     if failed:
         parts += ["", f"> **{len(failed)} doc-test(s) failed.** See the linked reports."]

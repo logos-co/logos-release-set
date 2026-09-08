@@ -9,9 +9,8 @@
 #   release-set.sh pin <group> <name>       print the pinned tag/version
 #   release-set.sh fetch <component> <bin>  download + extract a released binary
 #   release-set.sh path <bin>               print the REAL path behind ./bin/<bin>
-#   release-set.sh seed-modules <component> copy a tool's bundled modules into MODULES_DIR
-#   release-set.sh wait-daemon [secs]       block until the logoscore daemon answers
-#   release-set.sh install <pkg> [...]      lgpd download + verify + lgpm install
+#   release-set.sh ctl-install <pkg>        logosctl download + verify + install
+#   release-set.sh install <pkg> [--ui]     lgpd download + verify + lgpm install
 #
 # Exit code 78 means "this artifact is not published for this platform" — the
 # caller should SKIP rather than fail. See the release-set workflow.
@@ -25,6 +24,9 @@ set -euo pipefail
 SKIP=78
 LOCK="release-set.lock.json"
 BIN="$PWD/bin"
+# Everything logosctl owns — modules, plugins, catalogs, keyring, logs — lives
+# in one session directory, so the specs never pass a modules path around.
+SESSION="${LOGOSCTL_SESSION:-./session}"
 
 die() { echo "error: $*" >&2; exit 1; }
 skip() { echo "SKIP: $*" >&2; exit $SKIP; }
@@ -123,19 +125,30 @@ else:
 PY
 }
 
-# asset_url <name> -> download URL of this platform's asset, empty if none
+# asset_url <name> <bin> -> download URL of this platform's asset, empty if none
+#
+# One release can publish several binaries for the same platform:
+# logos-logoscore-cli ships logoscore-* and logosctl-* side by side, and picking
+# on platform alone would take whichever the resolver sorted first. So prefer
+# the asset whose filename starts with the binary we were asked for — every repo
+# names its assets that way (lgpd-, lgpm-, LogosBasecamp-) — and fall back to
+# the first platform match when nothing does.
 asset_url() {
   require_lock
-  python3 - "$LOCK" "$1" "$(detect_platform)" <<'PY'
+  python3 - "$LOCK" "$1" "$(detect_platform)" "${2:-}" <<'PY'
 import json, sys
-lock, name, platform = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+lock, name, platform, binname = (json.load(open(sys.argv[1])), sys.argv[2],
+                                 sys.argv[3], sys.argv[4])
 for group in ("apps", "devUtils"):
     for item in lock.get(group, []):
         if item["name"] == name:
-            for asset in item.get("assets", []):
-                if asset.get("platform") == platform:
-                    print(asset["url"])
-                    sys.exit(0)
+            matches = [a for a in item.get("assets", [])
+                       if a.get("platform") == platform]
+            named = [a for a in matches
+                     if binname and a["name"].lower().startswith(binname.lower())]
+            for asset in (named or matches):
+                print(asset["url"])
+                break
             sys.exit(0)
 sys.exit(f"{name} is not an app or dev-util in the release set")
 PY
@@ -152,13 +165,13 @@ PY
 # Expose a fetched binary as ./bin/<name>.
 #
 # A wrapper that `exec`s the real file, NOT a symlink. These tools locate their
-# siblings relative to their own executable: logoscore looks for `logos_host`
-# next to itself and for `../modules`. On macOS that lookup uses
-# _NSGetExecutablePath, which reports the path the process was INVOKED with and
-# does not resolve symlinks — so through a symlink logoscore searches ./bin and
-# reports "logos_host not found", and every module load fails. `exec` replaces
-# the process image, so the running program's own path is the real one inside
-# the bundle and both lookups land where they should, on every platform.
+# siblings relative to their own executable: logosctl looks for `logos_host`
+# next to itself and for its bundled modules at `../modules`. On macOS that
+# lookup uses _NSGetExecutablePath, which reports the path the process was
+# INVOKED with and does not resolve symlinks — so through a symlink the runtime
+# searches ./bin, reports "logos_host not found", and every module load fails.
+# `exec` replaces the process image, so the running program's own path is the
+# real one inside the bundle and both lookups land where they should.
 link_binary() {
   local binname="$1" target="$2"
   cat > "$BIN/$binname" <<WRAPPER
@@ -174,7 +187,7 @@ cmd_fetch() {
   local binname="${2:?usage: fetch <component> <bin-name>}"
   local platform url file workdir
   platform="$(detect_platform)"
-  url="$(asset_url "$component")"
+  url="$(asset_url "$component" "$binname")"
 
   if [ -z "$url" ]; then
     skip "$component has no $platform artifact in this release set"
@@ -231,90 +244,38 @@ cmd_path() {
   cat "$BIN/.$binname.path"
 }
 
-# wait-daemon — block until logoscore answers, or give up.
-#
-# Startup is not instantaneous and not constant: the daemon loads
-# capability_module before it writes its client config, which takes a couple of
-# seconds on a warm machine and longer on a loaded CI runner. A fixed sleep
-# either races or wastes time; polling does neither.
-cmd_wait_daemon() {
-  local timeout="${1:-60}" i=1
-  while [ "$i" -le "$timeout" ]; do
-    if "$BIN/logoscore" status >/dev/null 2>&1; then
-      echo "==> daemon ready after ${i}s"
-      "$BIN/logoscore" status
-      return 0
-    fi
-    sleep 1
-    i=$((i + 1))
-  done
-  echo "--- daemon log ---" >&2
-  tail -30 logs.txt >&2 2>/dev/null || true
-  die "logoscore did not become ready within ${timeout}s"
-}
-
-# seed-modules — copy a fetched tool's bundled modules into MODULES_DIR.
-#
-# logoscore ships capability_module inside its own bundle and finds it relative
-# to its executable. Because we run it through a symlink in ./bin, that lookup
-# lands on our lgpm target directory on macOS (see `path` above) and the module
-# is never found — every load-module then stalls on capability negotiation and
-# fails. Copying the bundled modules into the directory we pass to `-m` makes
-# the tool independent of that resolution, on every platform.
-cmd_seed_modules() {
-  local component="${1:?usage: seed-modules <component>}"
-  local modules_dir="${MODULES_DIR:-./modules}"
-  local src
-  src="$(find ".fetch/$component" -maxdepth 3 -type d -name modules -print -quit 2>/dev/null || true)"
-  [ -n "$src" ] || die "$component has no bundled modules/ directory — was it fetched?"
-  mkdir -p "$modules_dir"
-  # -L dereferences: nix bundles are full of symlinks into the store.
-  cp -RL "$src"/. "$modules_dir"/
-  chmod -R u+w "$modules_dir" 2>/dev/null || true
-  echo "==> seeded $(ls "$src" | tr '\n' ' ')from $component into $modules_dir"
-}
-
 # ---------------------------------------------------------------------------
 # install — pull a catalog package at its pinned version and install it
 # ---------------------------------------------------------------------------
 
-cmd_install() {
-  local pkg="${1:?usage: install <package> [--ui]}"
-  local ui="${2:-}"
-  local group version variant lgxsha file
+# Which group holds this package, and what the set pinned it to. Sets PKG_GROUP
+# and PKG_VERSION; SKIPs when the catalog publishes no variant for us.
+pinned_package() {
+  local pkg="$1" variant
   require_lock
 
-  group="modules"
+  PKG_GROUP="modules"
   python3 -c "
 import json,sys
 lock=json.load(open('$LOCK'))
 sys.exit(0 if any(i['name']=='$pkg' for i in lock['modules']) else 1)
-" || group="uiApps"
+" || PKG_GROUP="uiApps"
 
-  version="$(cmd_pin "$group" "$pkg")"
-  variant="$(cmd_field "$group" "$pkg" "platforms")"
+  PKG_VERSION="$(cmd_pin "$PKG_GROUP" "$pkg")"
+  variant="$(cmd_field "$PKG_GROUP" "$pkg" "platforms")"
   case "$variant" in
     *"$(detect_platform)"*) : ;;
-    *) skip "$pkg@$version has no $(detect_platform) variant" ;;
+    *) skip "$pkg@$PKG_VERSION has no $(detect_platform) variant" ;;
   esac
+}
 
-  # Where installs land. Basecamp wants them under a --user-dir tree; the
-  # headless specs use plain ./modules. Override with MODULES_DIR / PLUGINS_DIR.
-  local modules_dir="${MODULES_DIR:-./modules}"
-  local plugins_dir="${PLUGINS_DIR:-./plugins}"
-
-  mkdir -p packages "$modules_dir" "$plugins_dir"
-  echo "==> lgpd download $pkg --version $version"
-  "$BIN/lgpd" download "$pkg" --version "$version" -o packages
-
-  file="$(find packages -name "$pkg-*.lgx" -print -quit)"
-  [ -n "$file" ] || die "lgpd produced no .lgx for $pkg"
-
-  # The catalog publishes a sha256 for every .lgx; verify what we just pulled
-  # is byte-identical to what the release set pinned.
-  lgxsha="$(cmd_field "$group" "$pkg" "lgx.sha256")"
-  if [ -n "$lgxsha" ]; then
-    python3 - "$file" "$lgxsha" <<'PY'
+# The catalog publishes a sha256 for every .lgx; verify what we just pulled is
+# byte-identical to what the release set pinned.
+verify_lgx() {
+  local pkg="$1" file="$2" lgxsha
+  lgxsha="$(cmd_field "$PKG_GROUP" "$pkg" "lgx.sha256")"
+  [ -n "$lgxsha" ] || return 0
+  python3 - "$file" "$lgxsha" <<'PY'
 import hashlib, sys
 path, expected = sys.argv[1], sys.argv[2]
 digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
@@ -322,7 +283,52 @@ if digest != expected:
     sys.exit(f"checksum mismatch for {path}\n  expected {expected}\n  got      {digest}")
 print(f"    sha256 OK ({digest[:12]}…)")
 PY
-  fi
+}
+
+# ctl-install — logosctl bundles package_downloader and package_manager, so one
+# binary does what lgpd and lgpm do below. Download and install stay two steps
+# rather than one `package install --version`: the release set's claim is about
+# a specific FILE, so the .lgx must be on disk to hash before anything unpacks
+# it. Needs a running daemon — that is where both package modules live.
+cmd_ctl_install() {
+  local pkg="${1:?usage: ctl-install <package>}"
+  local out file
+  pinned_package "$pkg"
+
+  mkdir -p packages
+  echo "==> logosctl package download $pkg --version $PKG_VERSION"
+  out="$("$BIN/logosctl" --config-dir "$SESSION" package download "$pkg" \
+           --version "$PKG_VERSION" -o packages --json)"
+  file="$(printf '%s' "$out" |
+          python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["path"])')" ||
+    die "no .lgx path in: $out"
+
+  verify_lgx "$pkg" "$file"
+
+  # Routed by the package's own manifest type — a core module lands in
+  # <session>/modules, a ui_qml plugin in <session>/plugins.
+  "$BIN/logosctl" --config-dir "$SESSION" package install --file "$file" -y
+}
+
+cmd_install() {
+  local pkg="${1:?usage: install <package> [--ui]}"
+  local ui="${2:-}"
+  local file
+  pinned_package "$pkg"
+
+  # Where installs land. Basecamp wants them under a --user-dir tree.
+  # Override with MODULES_DIR / PLUGINS_DIR.
+  local modules_dir="${MODULES_DIR:-./modules}"
+  local plugins_dir="${PLUGINS_DIR:-./plugins}"
+
+  mkdir -p packages "$modules_dir" "$plugins_dir"
+  echo "==> lgpd download $pkg --version $PKG_VERSION"
+  "$BIN/lgpd" download "$pkg" --version "$PKG_VERSION" -o packages
+
+  file="$(find packages -name "$pkg-*.lgx" -print -quit)"
+  [ -n "$file" ] || die "lgpd produced no .lgx for $pkg"
+
+  verify_lgx "$pkg" "$file"
 
   if [ "$ui" = "--ui" ]; then
     "$BIN/lgpm" --modules-dir "$modules_dir" --ui-plugins-dir "$plugins_dir" \
@@ -355,9 +361,8 @@ case "${1:-}" in
   field)    shift; cmd_field "$@" ;;
   fetch)        shift; cmd_fetch "$@" ;;
   path)         shift; cmd_path "$@" ;;
-  seed-modules) shift; cmd_seed_modules "$@" ;;
-  wait-daemon)  shift; cmd_wait_daemon "$@" ;;
+  ctl-install)  shift; cmd_ctl_install "$@" ;;
   install)      shift; cmd_install "$@" ;;
   install-all)  shift; cmd_install_all "$@" ;;
-  *) die "usage: release-set.sh {lock|platform|pin|field|fetch|path|seed-modules|install|install-all} ..." ;;
+  *) die "usage: release-set.sh {lock|platform|pin|field|fetch|path|ctl-install|install|install-all} ..." ;;
 esac

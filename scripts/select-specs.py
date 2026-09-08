@@ -18,7 +18,10 @@ import argparse
 import json
 import sys
 
-TOOLS = ["logos-logoscore-cli", "logos-package-downloader", "logos-package-manager"]
+# The headless specs drive logosctl, which bundles package management, so
+# logos-logoscore-cli is the only binary they need. Basecamp has no such
+# built-in, and still populates its user dir with lgpd + lgpm.
+CTL = ["logos-logoscore-cli"]
 PM_TOOLS = ["logos-package-downloader", "logos-package-manager"]
 
 BUILDER = ["logos-module-builder"]
@@ -33,13 +36,13 @@ BUILDER = ["logos-module-builder"]
 SPECS = {
     # Each headless spec also loads `openmetrics` and scrapes /metrics, so that
     # package must publish this platform's variant too.
-    "headless-storage-module":    {"apps": TOOLS,
+    "headless-storage-module":    {"apps": CTL,
                                    "packages": ["storage_module", "openmetrics"],
                                    "devUtils": BUILDER},
-    "headless-delivery-module":   {"apps": TOOLS,
+    "headless-delivery-module":   {"apps": CTL,
                                    "packages": ["delivery_module", "openmetrics"],
                                    "devUtils": BUILDER},
-    "headless-blockchain-module": {"apps": TOOLS,
+    "headless-blockchain-module": {"apps": CTL,
                                    "packages": ["blockchain_module", "openmetrics"],
                                    "devUtils": BUILDER},
     # Launches the shipped Basecamp artifact, so that artifact must exist.
