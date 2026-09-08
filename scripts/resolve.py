@@ -408,7 +408,7 @@ def resolve_catalog_package(name, version, catalog_repo, index):
     if entry_index is None:
         raise GitHubError(
             f"{name}@{version} is not in the catalog index — check the version, "
-            f"or run `lgpd info {name}` to list what is published"
+            f"or run `logosctl package show {name}` to list what is published"
         )
 
     publisher_ref = entry_index.get("publisherRef") or f"{name}-v{version}"

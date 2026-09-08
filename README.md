@@ -22,7 +22,7 @@ Four groups, two pinning styles:
 
 | Group | Pinned by | What it is |
 |---|---|---|
-| `apps` | GitHub release **tag** | Basecamp, logoscore, lgpm, lgpd |
+| `apps` | GitHub release **tag** | Basecamp, logosctl, lgpm, lgpd |
 | `devUtils` | GitHub release **tag** | logos-module-builder |
 | `modules` | catalog **version** | `core` modules — install to `--modules-dir` |
 | `uiApps` | catalog **version** | `ui_qml` plugins — install to `--ui-plugins-dir` |
@@ -94,8 +94,14 @@ python3 scripts/resolve.py release-set.json -o release-set.lock.json \
 
 Five executable specs, run on **linux-x86_64, linux-arm64 and macOS arm64**.
 They use only released artifacts: tools downloaded from GitHub releases at the
-pinned tags, modules installed from the catalog with `lgpd` and `lgpm` at the
-pinned versions and checksum-verified on the way in.
+pinned tags, modules installed from the catalog at the pinned versions and
+checksum-verified on the way in.
+
+The three headless specs drive **`logosctl`**, which is the runtime and the
+package manager in one — it bundles `package_manager` and `package_downloader`,
+so a single artifact resolves, installs, loads and calls. The two Basecamp specs
+have no such built-in and still populate Basecamp's user directory with `lgpd`
+and `lgpm`, which is how each of those releases stays covered.
 
 | Spec | What it proves |
 |---|---|
@@ -128,10 +134,11 @@ each configured module over IPC, merging the results into one document with a
 `blockchain_module` implements neither, so there the probe carries the metric
 and publishes the block count it observed.
 
-**Everything is installed before the daemon starts.** The runtime scans its
-module directories once, at startup, and there is no rescan command — a package
-installed while it is running is invisible, and `load-module` fails with
-`MODULE_LOAD_FAILED`.
+**The daemon starts before anything is installed.** `logosctl`'s package
+commands are served by the `package_manager` module inside the running daemon,
+and the daemon re-scans after each install, restarting only what was already
+loaded. Basecamp is the other way round: `lgpm` writes into its user directory
+before it launches.
 
 Everything is the **portable** variant, end to end. A dev build RPATHs into
 `/nix/store` and will not load beside portable catalog packages, so probes build
@@ -140,18 +147,20 @@ Everything is the **portable** variant, end to end. A dev build RPATHs into
 ### Two things that look like details and are not
 
 **Fetched tools are launched through an `exec` wrapper, never a symlink.**
-`logoscore` finds `logos_host` next to its own executable and its bundled
-modules at `../modules`. On macOS that lookup uses `_NSGetExecutablePath`, which
-reports the path the process was *invoked* with and does not resolve symlinks —
-so behind a symlink the runtime searches `./bin`, reports `logos_host not
-found`, and **every module load fails**. `exec` replaces the process image, so
-the running program's own path is the real one inside the bundle. The same
-applies to launching Basecamp, hence `release-set.sh path`.
+`logosctl` finds `logos_host` next to its own executable and its bundled modules
+at `../modules`. On macOS that lookup uses `_NSGetExecutablePath`, which reports
+the path the process was *invoked* with and does not resolve symlinks — so
+behind a symlink the runtime searches `./bin`, reports `logos_host not found`,
+and **every module load fails**. `exec` replaces the process image, so the
+running program's own path is the real one inside the bundle. The same applies
+to launching Basecamp, hence `release-set.sh path`.
 
-**`capability_module` is seeded into the modules directory.** It is the auth
-handshake every `load-module` needs, and it ships inside the `logoscore` bundle.
-Copying it into the directory passed to `-m` makes the runtime independent of
-where it thinks its own bundle is.
+**A fetch names the binary it wants, not just the platform.**
+`logos-logoscore-cli` publishes `logosctl-*` and `logoscore-*` side by side, so
+"the first asset for this platform" is ambiguous and would silently download the
+wrong bundle — `cmd_fetch` then dies looking for an executable that is not in
+it. `asset_url` prefers the asset whose filename starts with the requested
+binary, which is how every repo here names them.
 
 ### Why two Basecamp specs
 
