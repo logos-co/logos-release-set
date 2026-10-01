@@ -148,15 +148,12 @@ jobs:
         with:
           name: release-set-lock
 
+      # Nix plus both Logos Attic caches, read-only (no token): they carry the
+      # probe modules' build closure and the inspector-enabled Basecamp bundle.
+      # The action holds the caches' current keys; a stale copy here once made
+      # every substitution fail silently into a build from source.
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
-        with:
-          # Read-only public caches — no tokens needed. They carry the probe
-          # modules' build closure and the inspector-enabled Basecamp bundle.
-          extra-conf: |
-            extra-substituters = https://cache.nix.logos.co/public
-            extra-trusted-public-keys = public:Z1wyVBEx8PHbXujYB52Mysv9Rd8rWIhyQ3bQyef9yy4=
-            fallback = true
+        uses: logos-co/setup-nix-cache-action@v1
 
       # The portable bundle carries its own Qt but not host graphics drivers —
       # you cannot bundle a GPU driver — so it loads libGL/glvnd from the host
@@ -262,12 +259,7 @@ jobs:
           name: release-set-lock
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
-        with:
-          extra-conf: |
-            extra-substituters = https://cache.nix.logos.co/public
-            extra-trusted-public-keys = public:Z1wyVBEx8PHbXujYB52Mysv9Rd8rWIhyQ3bQyef9yy4=
-            fallback = true
+        uses: logos-co/setup-nix-cache-action@v1
 
       - name: Decide whether this spec was requested
         id: select
