@@ -283,9 +283,9 @@ def resolve_binary_repo(name, repo, tag, kind):
         "assets": assets,
         "platforms": sorted({a["platform"] for a in assets if a["platform"]}),
     }
-    if kind == "devUtil" and not assets:
-        # module-builder publishes no binaries: it is consumed as a flake ref
-        # pinned to the tag. Absent assets are expected, not a coverage gap.
+    if kind in ("devUtil", "tool") and not assets:
+        # module-builder, lm and lgx publish no binaries: each is consumed as a
+        # flake ref pinned to the tag. Absent assets are expected, not a coverage gap.
         entry["consumedAs"] = "flake"
         entry["flakeRef"] = f"github:{repo}/{tag}"
     return entry
@@ -321,14 +321,14 @@ def default_branch_commit(repo):
 def release_set_pins(lock):
     """{repo slug: (ref, commit, label)} for every repo the release set pins.
 
-    Apps and dev utils are pinned by tag, which is what the tutorial is handed.
+    Apps, dev utils and tools are pinned by tag, which is what the tutorial is handed.
     Catalog packages have no tag of their own, so their source commit is."""
     pins = {}
-    for group in ("apps", "devUtils", "modules", "uiApps"):
+    for group in ("apps", "devUtils", "tools", "modules", "uiApps"):
         for item in lock.get(group, []):
             if not item.get("repo") or not item.get("commit"):
                 continue
-            by_tag = group in ("apps", "devUtils")
+            by_tag = group in ("apps", "devUtils", "tools")
             ref = item["tag"] if by_tag else item["commit"]
             label = f"{group}/{item['name']}@{item['tag'] if by_tag else item['version']}"
             previous = pins.get(item["repo"])
@@ -595,7 +595,7 @@ def find_placeholders(spec):
     out = []
     if spec.get("version") == PLACEHOLDER:
         out.append("version")
-    for group in ("apps", "devUtils"):
+    for group in ("apps", "devUtils", "tools"):
         for item in spec.get(group, []):
             if item.get("releaseTag") == PLACEHOLDER:
                 out.append(f"{group}[{item['name']}].releaseTag")
@@ -611,7 +611,7 @@ def find_placeholders(spec):
 def platform_coverage(lock):
     """Per-platform gaps, so the workflow can skip a spec and flag it."""
     gaps = []
-    for group in ("apps", "devUtils", "modules", "uiApps"):
+    for group in ("apps", "devUtils", "tools", "modules", "uiApps"):
         for item in lock.get(group, []):
             if item.get("consumedAs") == "flake":
                 continue
@@ -620,7 +620,7 @@ def platform_coverage(lock):
                 if platform not in covered:
                     # Identify by the field that IS the pin for this group; a
                     # catalog entry's `tag` is its source repo's tag, not its pin.
-                    label = item["tag"] if group in ("apps", "devUtils") else item["version"]
+                    label = item["tag"] if group in ("apps", "devUtils", "tools") else item["version"]
                     gaps.append({
                         "component": item["name"],
                         "version": label,
@@ -654,6 +654,7 @@ def resolve(spec, release_set_commit, generated_at=None):
         "platforms": PLATFORMS,
         "apps": [],
         "devUtils": [],
+        "tools": [],
         "modules": [],
         "uiApps": [],
         "tests": [],
@@ -661,7 +662,7 @@ def resolve(spec, release_set_commit, generated_at=None):
     if generated_at:
         lock["generatedAt"] = generated_at
 
-    for kind, group in (("app", "apps"), ("devUtil", "devUtils")):
+    for kind, group in (("app", "apps"), ("devUtil", "devUtils"), ("tool", "tools")):
         for item in spec.get(group, []):
             print(f"  resolving {group}/{item['name']}@{item['releaseTag']}", file=sys.stderr)
             lock[group].append(

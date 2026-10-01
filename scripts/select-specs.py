@@ -66,7 +66,7 @@ def specs_covering(name, lock):
 
 def index_by_name(lock):
     entries = {}
-    for group in ("apps", "devUtils", "modules", "uiApps"):
+    for group in ("apps", "devUtils", "tools", "modules", "uiApps"):
         for item in lock.get(group, []):
             entries[item["name"]] = item
     return entries

@@ -48,7 +48,7 @@ def attach_validation(lock):
     # version, so the tutorial's specs are evidence for that artifact too.
     tutorial_repos = {pin["repo"] for pin in tutorial.get("pins", [])
                       if pin["source"].startswith("release set")}
-    for group in ("apps", "devUtils", "modules", "uiApps"):
+    for group in ("apps", "devUtils", "tools", "modules", "uiApps"):
         for item in lock.get(group, []):
             covering = selector.specs_covering(item["name"], lock)
             if item.get("repo") in tutorial_repos:
@@ -213,6 +213,8 @@ def render(lock):
         binary_table(lock.get("apps"), "Apps"),
         "",
         binary_table(lock.get("devUtils"), "Dev utils"),
+        "",
+        binary_table(lock.get("tools"), "Tools"),
         "",
         package_table(lock.get("modules"), "Modules"),
         "",

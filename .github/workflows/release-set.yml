@@ -75,7 +75,7 @@ jobs:
           import json
           lock = json.load(open("release-set.lock.json"))
           print("\n| Component | Pin | Commit |\n|---|---|---|")
-          for group in ("apps", "devUtils"):
+          for group in ("apps", "devUtils", "tools"):
               for item in lock[group]:
                   print(f"| {item['name']} | `{item['tag']}` | `{(item['commit'] or '')[:10]}` |")
           for group in ("modules", "uiApps"):

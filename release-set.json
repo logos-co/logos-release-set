@@ -23,6 +23,11 @@
     { "name": "logos-module-builder",     "repo": "logos-co/logos-module-builder",     "releaseTag": "CHANGE-ME" }
   ],
 
+  "tools": [
+    { "name": "logos-module",             "repo": "logos-co/logos-module",             "releaseTag": "CHANGE-ME" },
+    { "name": "logos-package",            "repo": "logos-co/logos-package",            "releaseTag": "CHANGE-ME" }
+  ],
+
   "modules": [
     { "name": "blockchain_module",  "version": "CHANGE-ME" },
     { "name": "chat_module",        "version": "CHANGE-ME" },

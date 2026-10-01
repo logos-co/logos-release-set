@@ -5,7 +5,7 @@ one file naming the exact release of every Logos component that is published and
 supported as a unit, plus the machinery to prove that set actually works.
 
 ```
-release-set.json          what a human pins   (5 tags + 11 versions)
+release-set.json          what a human pins   (7 tags + 13 versions + the tutorial)
         │
         │  scripts/resolve.py
         ▼
@@ -18,12 +18,13 @@ GitHub release            what users get      (links, reports, the lock)
 
 ## The input: `release-set.json`
 
-Four groups, two pinning styles:
+Five groups, two pinning styles:
 
 | Group | Pinned by | What it is |
 |---|---|---|
 | `apps` | GitHub release **tag** | Basecamp, logosctl, lgpm, lgpd |
 | `devUtils` | GitHub release **tag** | logos-module-builder |
+| `tools` | GitHub release **tag** | logos-module (`lm`), logos-package (`lgx`) |
 | `modules` | catalog **version** | `core` modules — install to `--modules-dir` |
 | `uiApps` | catalog **version** | `ui_qml` plugins — install to `--ui-plugins-dir` |
 
@@ -185,7 +186,7 @@ them on; the resolver reads it at the pinned commit and pins each repo:
 
 | The repo is… | It is built at… |
 |---|---|
-| pinned by this release set (`apps`, `devUtils`) | the release set's **tag** |
+| pinned by this release set (`apps`, `devUtils`, `tools`) | the release set's **tag** |
 | the source of a catalog package (`modules`, `uiApps`) | that package's source **commit** |
 | pinned by `tutorial-set.json` | the tutorial's own tag or commit |
 | left on its default branch by the tutorial | the branch head **at resolve time**, frozen into the lock |
