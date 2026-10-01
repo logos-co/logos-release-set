@@ -44,15 +44,17 @@ def attach_validation(lock):
     """
     selector = _load_select_specs()
     tutorial = lock.get("tutorial") or {}
-    # The tutorial built against a release-set artifact's repo at its pinned
-    # version, so the tutorial's specs are evidence for that artifact too.
-    tutorial_repos = {pin["repo"] for pin in tutorial.get("pins", [])
-                      if pin["source"].startswith("release set")}
+    # A tutorial spec is evidence for an artifact only if it built against that
+    # artifact's repo, at the release set's version.
+    pinned = {pin["repo"] for pin in tutorial.get("pins", [])
+              if pin["source"].startswith("release set")}
+    spec_repos = tutorial.get("specRepos", {})
     for group in ("apps", "devUtils", "tools", "modules", "uiApps"):
         for item in lock.get(group, []):
             covering = selector.specs_covering(item["name"], lock)
-            if item.get("repo") in tutorial_repos:
-                covering = covering + tutorial["specs"]
+            if item.get("repo") in pinned:
+                covering = covering + sorted(spec for spec, repos in spec_repos.items()
+                                             if item["repo"] in repos)
             item["validatedBy"] = [
                 {
                     "spec": test["spec"],

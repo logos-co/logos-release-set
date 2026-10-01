@@ -297,6 +297,28 @@ def resolve_binary_repo(name, repo, tag, kind):
 
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
+# What a tutorial spec builds against: doctest pins each `github:<o>/<r>{release}`
+# URL, and a `requires:` chain runs the specs it names first.
+RELEASE_URL = re.compile(r"github:([^/\s\"']+)/([^/\s{\"']+)\{release\}")
+REQUIRES = re.compile(r"^requires:[ \t]*\n((?:[ \t]+-[ \t]*\S+[ \t]*\n)+)", re.M)
+
+
+def spec_repos(repo, commit, spec, seen=None):
+    """owner/repo slugs a tutorial spec builds against, through its `requires:`."""
+    seen = set() if seen is None else seen
+    if spec in seen:
+        return set()
+    seen.add(spec)
+    text = get_file(repo, f"tests/{spec}.test.yaml", commit)
+    if text is None:
+        raise GitHubError(f"{repo}@{commit[:10]}: no tests/{spec}.test.yaml")
+    used = {f"{owner}/{name}" for owner, name in RELEASE_URL.findall(text)}
+    match = REQUIRES.search(text)
+    for line in (match.group(1).splitlines() if match else []):
+        required = line.strip().lstrip("-").strip().strip("\"'")
+        used |= spec_repos(repo, commit, required.removesuffix(".test.yaml"), seen)
+    return used
+
 
 def resolve_ref_commit(repo, ref):
     """A tag or full commit sha -> (commit, tag or None). Branches are refused:
@@ -393,6 +415,9 @@ def resolve_tutorial(entry, lock):
         # Specs with a Windows leg, and the flake targets logos-windows-ci
         # stages for each. Absent from tutorials older than that leg.
         "windows": tutorial_set.get("windows", []),
+        # Per spec, so an artifact is credited only to the specs that built it.
+        "specRepos": {spec: sorted(spec_repos(repo, commit, spec))
+                      for spec in tutorial_set["specs"]},
         "pins": pins,
     }
 
