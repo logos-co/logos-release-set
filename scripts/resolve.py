@@ -390,6 +390,9 @@ def resolve_tutorial(entry, lock):
         "commit": commit,
         "specs": tutorial_set["specs"],
         "platforms": tutorial_set["platforms"],
+        # Specs with a Windows leg, and the flake targets logos-windows-ci
+        # stages for each. Absent from tutorials older than that leg.
+        "windows": tutorial_set.get("windows", []),
         "pins": pins,
     }
 

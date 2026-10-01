@@ -207,6 +207,18 @@ platform the tutorial does not list is a skip with that reason, not a failure.
 An artifact whose repo the tutorial built against at the release set's version
 lists the tutorial's reports in its `validatedBy`.
 
+**Windows.** The release set validates Windows only through the tutorial's
+Windows legs (the `windows` entries of its `tutorial-set.json`). Nix does not
+run on Windows, so the `tutorial-windows` job calls
+[logos-windows-ci](https://github.com/logos-co/logos-windows-ci) with
+`repository`/`ref` set to the pinned tutorial commit: it cross-builds the
+tutorial's `flake.nix` on Linux, pinned with this release set's versions as
+`--override-input` pairs (computed by the tutorial's own
+`tutorial-set.py override-inputs`), and runs each spec's Windows half on
+`windows-latest`. `scripts/windows-results.py` reads each leg's execution
+records into a `windows-x86_64` result: a leg with no records failed. Tutorial
+specs without a Windows leg are skips; the release set's own doc-tests show `—`.
+
 The tutorial at the pinned commit must work with the pinned versions — it
 tracks its dependencies' default branches, so pick a commit from when they
 matched.
@@ -255,6 +267,7 @@ scripts/select-specs.py             which specs can run on a platform, and why n
 scripts/render-release.py           lock + results -> release notes
 scripts/tutorial-plan.py            lock -> tutorial matrix, pins, skips
 scripts/record-result.py            one job's outcome -> results-<platform>-<spec>.json
+scripts/windows-results.py          Windows legs' records -> results-windows-x86_64-*.json
 doctests/release-set.sh             fetch/install helper the specs drive
 doctests/*.test.yaml                the five specs
 doctests/run.sh                     run them locally

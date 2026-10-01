@@ -49,6 +49,9 @@ jobs:
       tutorial_any: ${{ steps.tutorial.outputs.any }}
       tutorial_repo: ${{ steps.tutorial.outputs.repo }}
       tutorial_commit: ${{ steps.tutorial.outputs.commit }}
+      tutorial_windows_matrix: ${{ steps.tutorial.outputs.windows_matrix }}
+      tutorial_windows_any: ${{ steps.tutorial.outputs.windows_any }}
+      tutorial_override_inputs: ${{ steps.overrides.outputs.args }}
     steps:
       - uses: actions/checkout@v4
 
@@ -93,13 +96,34 @@ jobs:
       # {repo: ref} map the tutorial's own tutorial-set.py applies.
       - name: Plan the tutorial run
         id: tutorial
+        env:
+          SPECS_INPUT: ${{ inputs.specs }}
         run: |
           python3 scripts/tutorial-plan.py release-set.lock.json \
             --override-out tutorial-pins.json \
             --skips-out results-tutorial-skipped.json \
+            --specs "$SPECS_INPUT" \
             --format github >> "$GITHUB_OUTPUT"
           { echo; echo "### Tutorial"; echo
             python3 scripts/tutorial-plan.py release-set.lock.json; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The tutorial's Windows legs build its flake.nix on a Linux runner. Its
+      # own script turns the pins above into --override-input pairs for that
+      # flake, so those legs build exactly what the other platforms do.
+      - uses: actions/checkout@v4
+        if: steps.tutorial.outputs.windows_any == 'true'
+        with:
+          repository: ${{ steps.tutorial.outputs.repo }}
+          ref: ${{ steps.tutorial.outputs.commit }}
+          path: tutorial
+
+      - name: Pin the tutorial flake's inputs
+        id: overrides
+        if: steps.tutorial.outputs.windows_any == 'true'
+        run: |
+          args="$(python3 tutorial/scripts/tutorial-set.py override-inputs --override tutorial-pins.json)"
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+          echo "$args"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -314,9 +338,63 @@ jobs:
           path: ${{ runner.temp }}/reports/
           if-no-files-found: warn
 
+  # The release set validates Windows only through the tutorial's Windows legs.
+  # Nix does not run on Windows: logos-windows-ci cross-builds the tutorial's
+  # flake on Linux at the pinned commit, with this release set's pins, and runs
+  # each spec's Windows half on windows-latest.
+  tutorial-windows:
+    name: ${{ matrix.spec }} (windows-x86_64)
+    needs: resolve
+    if: needs.resolve.outputs.tutorial_windows_any == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.tutorial_windows_matrix) }}
+    uses: logos-co/logos-windows-ci/.github/workflows/windows-ci.yml@v1
+    secrets: inherit
+    with:
+      repository: ${{ needs.resolve.outputs.tutorial_repo }}
+      ref: ${{ needs.resolve.outputs.tutorial_commit }}
+      instance: ${{ matrix.spec }}
+      targets: ${{ matrix.targets }}
+      extra-nix-args: ${{ needs.resolve.outputs.tutorial_override_inputs }}
+      doctest-spec: tests/${{ matrix.spec }}.test.yaml
+      doctest-artifact: reports-windows-x86_64-${{ matrix.spec }}
+
+  # A reusable-workflow job has no step of its own to record an outcome from,
+  # so each leg's result is read from the execution records it uploaded.
+  tutorial-windows-results:
+    name: Record the tutorial's Windows results
+    needs: [resolve, tutorial-windows]
+    if: ${{ always() && needs.resolve.outputs.tutorial_windows_any == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: doctest-execs-${{ github.event.repository.name }}-*
+          path: execs
+
+      - name: Record the results
+        env:
+          MATRIX: ${{ needs.resolve.outputs.tutorial_windows_matrix }}
+          PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.run_id }}
+          CALLER: ${{ github.event.repository.name }}
+        run: |
+          specs="$(python3 -c 'import json,os; print(" ".join(e["spec"] for e in json.loads(os.environ["MATRIX"])["include"]))')"
+          python3 scripts/windows-results.py execs --specs "$specs" --caller "$CALLER" \
+            --pages-base "$PAGES_BASE" -o results-windows-x86_64-tutorial.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results-windows-x86_64-tutorial
+          path: results-windows-x86_64-tutorial.json
+          if-no-files-found: error
+
   publish:
     name: Publish the release set
-    needs: [resolve, doctests, tutorial]
+    needs: [resolve, doctests, tutorial, tutorial-windows-results]
     # Only a fully green run publishes. Placeholders on main never get this far
     # — the resolve job fails first. The tutorial job is skipped, not failed,
     # when the release set pins no tutorial.
@@ -325,14 +403,26 @@ jobs:
           && needs.resolve.result == 'success'
           && needs.doctests.result == 'success'
           && (needs.tutorial.result == 'success' || needs.tutorial.result == 'skipped')
+          && (needs.tutorial-windows-results.result == 'success' || needs.tutorial-windows-results.result == 'skipped')
           && github.ref_name != 'main' && github.ref_name != 'master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
+      # By name rather than everything: the Windows legs also upload their
+      # staged trees, hundreds of MB each, which publishing never reads.
       - uses: actions/download-artifact@v4
         with:
+          name: release-set-lock
+          path: artifacts/release-set-lock
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reports-*
           path: artifacts
 
       # The results recorded each report at <run_id>/<platform>/<spec>/.
@@ -353,9 +443,12 @@ jobs:
               linux-x86_64-*) platform=linux-x86_64 ;;
               linux-arm64-*)  platform=linux-arm64 ;;
               macos-arm64-*)  platform=macos-arm64 ;;
+              windows-x86_64-*) platform=windows-x86_64 ;;
               *) echo "unrecognised artifact name: $dir" >&2; exit 1 ;;
             esac
             spec="${rest#"$platform"-}"
+            # logos-windows-ci appends the runner to the prefix it is given.
+            spec="${spec%-windows-latest}"
             mkdir -p "site/$platform/$spec"
             cp "$dir/index.html" "site/$platform/$spec/index.html"
             found=$((found + 1))

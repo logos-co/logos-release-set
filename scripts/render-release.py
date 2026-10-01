@@ -153,6 +153,14 @@ def results_table(tests):
     return "\n".join(rows) + "\n"
 
 
+def windows_note(tests):
+    if not any(t["platform"] == "windows-x86_64" for t in tests):
+        return ""
+    return ("Windows is validated only by the tutorial's Windows legs: Nix does not "
+            "run there, so each is cross-built on Linux and run on `windows-latest`. "
+            "The release set's own doc-tests do not run on Windows (`—`).\n")
+
+
 def skips_section(tests):
     skipped = [t for t in tests if t["status"] == "skipped"]
     if not skipped:
@@ -206,6 +214,7 @@ def render(lock):
         "",
         results_table(tests),
         "",
+        windows_note(tests),
         skips_section(tests),
         "",
         "## Artifacts",
