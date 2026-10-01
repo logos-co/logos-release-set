@@ -23,11 +23,11 @@ import json
 import sys
 
 # Groups pinned by GitHub release tag share one set of column widths; groups
-# pinned by catalog version share another. That is what makes `apps` and
-# `devUtils` line up with each other, and `modules` with `uiApps`.
-TAG_GROUPS = ("apps", "devUtils")
+# pinned by catalog version share another. That is what makes `apps`,
+# `devUtils` and `tools` line up with each other, and `modules` with `uiApps`.
+TAG_GROUPS = ("apps", "devUtils", "tools")
 VERSION_GROUPS = ("modules", "uiApps")
-ORDER = ("apps", "devUtils", "modules", "uiApps")
+ORDER = ("apps", "devUtils", "tools", "modules", "uiApps")
 
 
 def q(value):
@@ -78,6 +78,12 @@ def render(spec):
             comma = "," if i < len(items) - 1 else ""
             out.append(f"    {q(k)}: {json.dumps(v, ensure_ascii=False)}{comma}")
         out.append("  },")
+
+    tutorial = spec.get("tutorial")
+    if tutorial is not None:
+        fields = ", ".join(f"{q(k)}: {q(v)}" for k, v in tutorial.items())
+        out.append("")
+        out.append(f'  "tutorial": {{ {fields} }},')
 
     for gi, group in enumerate(ORDER):
         if group not in spec:

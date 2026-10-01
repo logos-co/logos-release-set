@@ -5,7 +5,7 @@ one file naming the exact release of every Logos component that is published and
 supported as a unit, plus the machinery to prove that set actually works.
 
 ```
-release-set.json          what a human pins   (5 tags + 11 versions)
+release-set.json          what a human pins   (7 tags + 13 versions + the tutorial)
         │
         │  scripts/resolve.py
         ▼
@@ -18,16 +18,21 @@ GitHub release            what users get      (links, reports, the lock)
 
 ## The input: `release-set.json`
 
-Four groups, two pinning styles:
+Five groups, two pinning styles:
 
 | Group | Pinned by | What it is |
 |---|---|---|
 | `apps` | GitHub release **tag** | Basecamp, logosctl, lgpm, lgpd |
 | `devUtils` | GitHub release **tag** | logos-module-builder |
+| `tools` | GitHub release **tag** | logos-module (`lm`), logos-package (`lgx`) |
 | `modules` | catalog **version** | `core` modules — install to `--modules-dir` |
 | `uiApps` | catalog **version** | `ui_qml` plugins — install to `--ui-plugins-dir` |
 
-Plus `version`, the release set's base SemVer identifier:
+Plus `tutorial`, the [logos-tutorial](https://github.com/logos-co/logos-tutorial)
+commit (or tag) whose specs run as part of the validation — see
+[The tutorial](#the-tutorial).
+
+And `version`, the release set's base SemVer identifier:
 `X.Y.Z-r.<release-number>` (for example, `0.2.1-r.1`). CI appends
 `+<release-set-commit-short-hash>` from the exact commit it checked out, so the
 published release tag becomes, for example, `v0.2.1-r.1+5ecc750`.
@@ -172,6 +177,52 @@ rebuilds the *same resolved commit* with the inspector on and drives the UI
 properly. Together: the binary users download starts, and the code inside it
 works.
 
+### The tutorial
+
+`"tutorial": { "repo": "logos-co/logos-tutorial", "ref": "<tag or commit>" }`
+adds the tutorial's specs to the validation. Its `tutorial-set.json` names every
+repo those specs build against, the specs CI runs, and the platforms it runs
+them on; the resolver reads it at the pinned commit and pins each repo:
+
+| The repo is… | It is built at… |
+|---|---|
+| pinned by this release set (`apps`, `devUtils`, `tools`) | the release set's **tag** |
+| the source of a catalog package (`modules`, `uiApps`) | that package's source **commit** |
+| pinned by `tutorial-set.json` | the tutorial's own tag or commit |
+| left on its default branch by the tutorial | the branch head **at resolve time**, frozen into the lock |
+
+So every platform builds the same commits, and `tutorial.pins` in the lock says
+which, and why. The workflow hands the pins to the tutorial as a
+`tutorial-pins.json` `{repo: ref}` map, which its own `scripts/tutorial-set.py`
+turns into doctest `--release-for` flags — the same path its CI and `run.sh`
+take, so a release-set run reproduces from a tutorial checkout:
+
+```bash
+python3 scripts/tutorial-plan.py release-set.lock.json --override-out tutorial-pins.json
+cd ../logos-tutorial && ./run.sh --pins-override ../logos-release-set/tutorial-pins.json
+```
+
+Each tutorial spec is a `tutorial-<name>` row in the validation table. A
+platform the tutorial does not list is a skip with that reason, not a failure.
+An artifact whose repo the tutorial built against at the release set's version
+lists the tutorial's reports in its `validatedBy`.
+
+**Windows.** The release set validates Windows only through the tutorial's
+Windows legs (the `windows` entries of its `tutorial-set.json`). Nix does not
+run on Windows, so the `tutorial-windows` job calls
+[logos-windows-ci](https://github.com/logos-co/logos-windows-ci) with
+`repository`/`ref` set to the pinned tutorial commit: it cross-builds the
+tutorial's `flake.nix` on Linux, pinned with this release set's versions as
+`--override-input` pairs (computed by the tutorial's own
+`tutorial-set.py override-inputs`), and runs each spec's Windows half on
+`windows-latest`. `scripts/windows-results.py` reads each leg's execution
+records into a `windows-x86_64` result: a leg with no records failed. Tutorial
+specs without a Windows leg are skips; the release set's own doc-tests show `—`.
+
+The tutorial at the pinned commit must work with the pinned versions — it
+tracks its dependencies' default branches, so pick a commit from when they
+matched.
+
 ### Running them locally
 
 ```bash
@@ -185,7 +236,8 @@ export RELEASE_SET_DIR="$PWD" GITHUB_TOKEN=...
 `.github/workflows/release-set.yml`, **manual only** (`workflow_dispatch`):
 
 1. **resolve** — every pin, or fail fast listing each unresolved `CHANGE-ME`.
-2. **doctests** — the three platforms in parallel. If the set pins an artifact
+2. **doctests** and **tutorial** — the three platforms in parallel; the
+   tutorial on the platforms its `tutorial-set.json` lists. If the set pins an artifact
    that a platform does not publish, the affected spec is **skipped, not
    failed** — a release with no linux-arm64 AppImage leaves nothing to
    smoke-test there, which is not a failure of the release set. Skipping is
@@ -213,6 +265,9 @@ release-set.json                    the input — placeholders on main
 scripts/resolve.py                  pins  -> release-set.lock.json
 scripts/select-specs.py             which specs can run on a platform, and why not
 scripts/render-release.py           lock + results -> release notes
+scripts/tutorial-plan.py            lock -> tutorial matrix, pins, skips
+scripts/record-result.py            one job's outcome -> results-<platform>-<spec>.json
+scripts/windows-results.py          Windows legs' records -> results-windows-x86_64-*.json
 doctests/release-set.sh             fetch/install helper the specs drive
 doctests/*.test.yaml                the five specs
 doctests/run.sh                     run them locally

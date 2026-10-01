@@ -283,12 +283,143 @@ def resolve_binary_repo(name, repo, tag, kind):
         "assets": assets,
         "platforms": sorted({a["platform"] for a in assets if a["platform"]}),
     }
-    if kind == "devUtil" and not assets:
-        # module-builder publishes no binaries: it is consumed as a flake ref
-        # pinned to the tag. Absent assets are expected, not a coverage gap.
+    if kind in ("devUtil", "tool") and not assets:
+        # module-builder, lm and lgx publish no binaries: each is consumed as a
+        # flake ref pinned to the tag. Absent assets are expected, not a coverage gap.
         entry["consumedAs"] = "flake"
         entry["flakeRef"] = f"github:{repo}/{tag}"
     return entry
+
+
+# --------------------------------------------------------------------------
+# Tutorial resolution
+# --------------------------------------------------------------------------
+
+COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+# What a tutorial spec builds against: doctest pins each `github:<o>/<r>{release}`
+# URL, and a `requires:` chain runs the specs it names first.
+RELEASE_URL = re.compile(r"github:([^/\s\"']+)/([^/\s{\"']+)\{release\}")
+REQUIRES = re.compile(r"^requires:[ \t]*\n((?:[ \t]+-[ \t]*\S+[ \t]*\n)+)", re.M)
+
+
+def spec_repos(repo, commit, spec, seen=None):
+    """owner/repo slugs a tutorial spec builds against, through its `requires:`."""
+    seen = set() if seen is None else seen
+    if spec in seen:
+        return set()
+    seen.add(spec)
+    text = get_file(repo, f"tests/{spec}.test.yaml", commit)
+    if text is None:
+        raise GitHubError(f"{repo}@{commit[:10]}: no tests/{spec}.test.yaml")
+    used = {f"{owner}/{name}" for owner, name in RELEASE_URL.findall(text)}
+    match = REQUIRES.search(text)
+    for line in (match.group(1).splitlines() if match else []):
+        required = line.strip().lstrip("-").strip().strip("\"'")
+        used |= spec_repos(repo, commit, required.removesuffix(".test.yaml"), seen)
+    return used
+
+
+def resolve_ref_commit(repo, ref):
+    """A tag or full commit sha -> (commit, tag or None). Branches are refused:
+    a release set pins things that cannot move."""
+    if COMMIT_SHA.match(ref):
+        if not api(f"/repos/{repo}/commits/{ref}"):
+            raise GitHubError(f"{repo}: no commit {ref}")
+        return ref, None
+    if not api(f"/repos/{repo}/git/ref/tags/{ref}"):
+        raise GitHubError(f"{repo}: {ref!r} is neither a tag nor a full commit sha")
+    return resolve_tag_commit(repo, ref), ref
+
+
+def default_branch_commit(repo):
+    info = api(f"/repos/{repo}")
+    if not info:
+        raise GitHubError(f"{repo}: repository not found")
+    branch = info["default_branch"]
+    return api(f"/repos/{repo}/commits/{branch}")["sha"], branch
+
+
+def release_set_pins(lock):
+    """{repo slug: (ref, commit, label)} for every repo the release set pins.
+
+    Apps, dev utils and tools are pinned by tag, which is what the tutorial is handed.
+    Catalog packages have no tag of their own, so their source commit is."""
+    pins = {}
+    for group in ("apps", "devUtils", "tools", "modules", "uiApps"):
+        for item in lock.get(group, []):
+            if not item.get("repo") or not item.get("commit"):
+                continue
+            by_tag = group in ("apps", "devUtils", "tools")
+            ref = item["tag"] if by_tag else item["commit"]
+            label = f"{group}/{item['name']}@{item['tag'] if by_tag else item['version']}"
+            previous = pins.get(item["repo"])
+            if previous and previous[1] != item["commit"]:
+                # Two packages from one repo at different commits: there is no
+                # single version of that repo to build the tutorial against.
+                pins[item["repo"]] = (None, None, f"{previous[2]} and {label} disagree")
+            elif not previous:
+                pins[item["repo"]] = (ref, item["commit"], label)
+    return pins
+
+
+def resolve_tutorial(entry, lock):
+    """Pin the tutorial, then every repo its specs build against.
+
+    The tutorial's tutorial-set.json names those repos. A repo the release set
+    pins gets the release set's version; any other keeps the tutorial's own
+    pin, and one the tutorial leaves on its default branch is frozen at that
+    branch's head now, so every platform builds the same commit and the lock
+    says which."""
+    repo = entry["repo"]
+    commit, tag = resolve_ref_commit(repo, entry["ref"])
+    text = get_file(repo, "tutorial-set.json", commit)
+    if text is None:
+        raise GitHubError(f"{repo}@{entry['ref']} has no tutorial-set.json — pin a "
+                          "commit that has one")
+    tutorial_set = json.loads(text)
+
+    ours = release_set_pins(lock)
+    pins = []
+    for dep in tutorial_set["repos"]:
+        print(f"  resolving tutorial/{dep['name']}", file=sys.stderr)
+        if dep["repo"] in ours:
+            ref, dep_commit, label = ours[dep["repo"]]
+            if ref is None:
+                raise GitHubError(f"tutorial dependency {dep['repo']}: {label}")
+            source = f"release set ({label})"
+        elif dep["ref"]:
+            dep_commit, _ = resolve_ref_commit(dep["repo"], dep["ref"])
+            ref, source = dep["ref"], "tutorial-set.json"
+        else:
+            dep_commit, branch = default_branch_commit(dep["repo"])
+            ref, source = dep_commit, f"{branch} at resolve time"
+        pins.append({
+            "name": dep["name"],
+            "repo": dep["repo"],
+            "repoUrl": f"https://github.com/{dep['repo']}",
+            "ref": ref,
+            "commit": dep_commit,
+            "source": source,
+        })
+
+    return {
+        "name": repo.split("/")[-1],
+        "repo": repo,
+        "repoUrl": f"https://github.com/{repo}",
+        "ref": entry["ref"],
+        "tag": tag,
+        "commit": commit,
+        "specs": tutorial_set["specs"],
+        "platforms": tutorial_set["platforms"],
+        # Specs with a Windows leg, and the flake targets logos-windows-ci
+        # stages for each. Absent from tutorials older than that leg.
+        "windows": tutorial_set.get("windows", []),
+        # Per spec, so an artifact is credited only to the specs that built it.
+        "specRepos": {spec: sorted(spec_repos(repo, commit, spec))
+                      for spec in tutorial_set["specs"]},
+        "pins": pins,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -492,7 +623,7 @@ def find_placeholders(spec):
     out = []
     if spec.get("version") == PLACEHOLDER:
         out.append("version")
-    for group in ("apps", "devUtils"):
+    for group in ("apps", "devUtils", "tools"):
         for item in spec.get(group, []):
             if item.get("releaseTag") == PLACEHOLDER:
                 out.append(f"{group}[{item['name']}].releaseTag")
@@ -500,13 +631,15 @@ def find_placeholders(spec):
         for item in spec.get(group, []):
             if item.get("version") == PLACEHOLDER:
                 out.append(f"{group}[{item['name']}].version")
+    if (spec.get("tutorial") or {}).get("ref") == PLACEHOLDER:
+        out.append("tutorial.ref")
     return out
 
 
 def platform_coverage(lock):
     """Per-platform gaps, so the workflow can skip a spec and flag it."""
     gaps = []
-    for group in ("apps", "devUtils", "modules", "uiApps"):
+    for group in ("apps", "devUtils", "tools", "modules", "uiApps"):
         for item in lock.get(group, []):
             if item.get("consumedAs") == "flake":
                 continue
@@ -515,7 +648,7 @@ def platform_coverage(lock):
                 if platform not in covered:
                     # Identify by the field that IS the pin for this group; a
                     # catalog entry's `tag` is its source repo's tag, not its pin.
-                    label = item["tag"] if group in ("apps", "devUtils") else item["version"]
+                    label = item["tag"] if group in ("apps", "devUtils", "tools") else item["version"]
                     gaps.append({
                         "component": item["name"],
                         "version": label,
@@ -549,6 +682,7 @@ def resolve(spec, release_set_commit, generated_at=None):
         "platforms": PLATFORMS,
         "apps": [],
         "devUtils": [],
+        "tools": [],
         "modules": [],
         "uiApps": [],
         "tests": [],
@@ -556,7 +690,7 @@ def resolve(spec, release_set_commit, generated_at=None):
     if generated_at:
         lock["generatedAt"] = generated_at
 
-    for kind, group in (("app", "apps"), ("devUtil", "devUtils")):
+    for kind, group in (("app", "apps"), ("devUtil", "devUtils"), ("tool", "tools")):
         for item in spec.get(group, []):
             print(f"  resolving {group}/{item['name']}@{item['releaseTag']}", file=sys.stderr)
             lock[group].append(
@@ -569,6 +703,10 @@ def resolve(spec, release_set_commit, generated_at=None):
             lock[group].append(
                 resolve_catalog_package(item["name"], item["version"], catalog_repo, index)
             )
+
+    if spec.get("tutorial"):
+        print(f"  resolving tutorial@{spec['tutorial']['ref']}", file=sys.stderr)
+        lock["tutorial"] = resolve_tutorial(spec["tutorial"], lock)
 
     lock["platformGaps"] = platform_coverage(lock)
     return lock

@@ -10,6 +10,8 @@
     "logosRepoUrl": "https://raw.githubusercontent.com/logos-co/logos-modules-release/refs/heads/main/logos-repo.json"
   },
 
+  "tutorial": { "repo": "logos-co/logos-tutorial", "ref": "CHANGE-ME" },
+
   "apps": [
     { "name": "logos-basecamp",           "repo": "logos-co/logos-basecamp",           "releaseTag": "CHANGE-ME" },
     { "name": "logos-logoscore-cli",      "repo": "logos-co/logos-logoscore-cli",      "releaseTag": "CHANGE-ME" },
@@ -19,6 +21,11 @@
 
   "devUtils": [
     { "name": "logos-module-builder",     "repo": "logos-co/logos-module-builder",     "releaseTag": "CHANGE-ME" }
+  ],
+
+  "tools": [
+    { "name": "logos-module",             "repo": "logos-co/logos-module",             "releaseTag": "CHANGE-ME" },
+    { "name": "logos-package",            "repo": "logos-co/logos-package",            "releaseTag": "CHANGE-ME" }
   ],
 
   "modules": [
