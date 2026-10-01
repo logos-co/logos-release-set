@@ -292,6 +292,109 @@ def resolve_binary_repo(name, repo, tag, kind):
 
 
 # --------------------------------------------------------------------------
+# Tutorial resolution
+# --------------------------------------------------------------------------
+
+COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def resolve_ref_commit(repo, ref):
+    """A tag or full commit sha -> (commit, tag or None). Branches are refused:
+    a release set pins things that cannot move."""
+    if COMMIT_SHA.match(ref):
+        if not api(f"/repos/{repo}/commits/{ref}"):
+            raise GitHubError(f"{repo}: no commit {ref}")
+        return ref, None
+    if not api(f"/repos/{repo}/git/ref/tags/{ref}"):
+        raise GitHubError(f"{repo}: {ref!r} is neither a tag nor a full commit sha")
+    return resolve_tag_commit(repo, ref), ref
+
+
+def default_branch_commit(repo):
+    info = api(f"/repos/{repo}")
+    if not info:
+        raise GitHubError(f"{repo}: repository not found")
+    branch = info["default_branch"]
+    return api(f"/repos/{repo}/commits/{branch}")["sha"], branch
+
+
+def release_set_pins(lock):
+    """{repo slug: (ref, commit, label)} for every repo the release set pins.
+
+    Apps and dev utils are pinned by tag, which is what the tutorial is handed.
+    Catalog packages have no tag of their own, so their source commit is."""
+    pins = {}
+    for group in ("apps", "devUtils", "modules", "uiApps"):
+        for item in lock.get(group, []):
+            if not item.get("repo") or not item.get("commit"):
+                continue
+            by_tag = group in ("apps", "devUtils")
+            ref = item["tag"] if by_tag else item["commit"]
+            label = f"{group}/{item['name']}@{item['tag'] if by_tag else item['version']}"
+            previous = pins.get(item["repo"])
+            if previous and previous[1] != item["commit"]:
+                # Two packages from one repo at different commits: there is no
+                # single version of that repo to build the tutorial against.
+                pins[item["repo"]] = (None, None, f"{previous[2]} and {label} disagree")
+            elif not previous:
+                pins[item["repo"]] = (ref, item["commit"], label)
+    return pins
+
+
+def resolve_tutorial(entry, lock):
+    """Pin the tutorial, then every repo its specs build against.
+
+    The tutorial's tutorial-set.json names those repos. A repo the release set
+    pins gets the release set's version; any other keeps the tutorial's own
+    pin, and one the tutorial leaves on its default branch is frozen at that
+    branch's head now, so every platform builds the same commit and the lock
+    says which."""
+    repo = entry["repo"]
+    commit, tag = resolve_ref_commit(repo, entry["ref"])
+    text = get_file(repo, "tutorial-set.json", commit)
+    if text is None:
+        raise GitHubError(f"{repo}@{entry['ref']} has no tutorial-set.json — pin a "
+                          "commit that has one")
+    tutorial_set = json.loads(text)
+
+    ours = release_set_pins(lock)
+    pins = []
+    for dep in tutorial_set["repos"]:
+        print(f"  resolving tutorial/{dep['name']}", file=sys.stderr)
+        if dep["repo"] in ours:
+            ref, dep_commit, label = ours[dep["repo"]]
+            if ref is None:
+                raise GitHubError(f"tutorial dependency {dep['repo']}: {label}")
+            source = f"release set ({label})"
+        elif dep["ref"]:
+            dep_commit, _ = resolve_ref_commit(dep["repo"], dep["ref"])
+            ref, source = dep["ref"], "tutorial-set.json"
+        else:
+            dep_commit, branch = default_branch_commit(dep["repo"])
+            ref, source = dep_commit, f"{branch} at resolve time"
+        pins.append({
+            "name": dep["name"],
+            "repo": dep["repo"],
+            "repoUrl": f"https://github.com/{dep['repo']}",
+            "ref": ref,
+            "commit": dep_commit,
+            "source": source,
+        })
+
+    return {
+        "name": repo.split("/")[-1],
+        "repo": repo,
+        "repoUrl": f"https://github.com/{repo}",
+        "ref": entry["ref"],
+        "tag": tag,
+        "commit": commit,
+        "specs": tutorial_set["specs"],
+        "platforms": tutorial_set["platforms"],
+        "pins": pins,
+    }
+
+
+# --------------------------------------------------------------------------
 # Catalog resolution
 # --------------------------------------------------------------------------
 
@@ -500,6 +603,8 @@ def find_placeholders(spec):
         for item in spec.get(group, []):
             if item.get("version") == PLACEHOLDER:
                 out.append(f"{group}[{item['name']}].version")
+    if (spec.get("tutorial") or {}).get("ref") == PLACEHOLDER:
+        out.append("tutorial.ref")
     return out
 
 
@@ -569,6 +674,10 @@ def resolve(spec, release_set_commit, generated_at=None):
             lock[group].append(
                 resolve_catalog_package(item["name"], item["version"], catalog_repo, index)
             )
+
+    if spec.get("tutorial"):
+        print(f"  resolving tutorial@{spec['tutorial']['ref']}", file=sys.stderr)
+        lock["tutorial"] = resolve_tutorial(spec["tutorial"], lock)
 
     lock["platformGaps"] = platform_coverage(lock)
     return lock

@@ -43,9 +43,16 @@ def attach_validation(lock):
     no direct pointer to its own evidence.
     """
     selector = _load_select_specs()
+    tutorial = lock.get("tutorial") or {}
+    # The tutorial built against a release-set artifact's repo at its pinned
+    # version, so the tutorial's specs are evidence for that artifact too.
+    tutorial_repos = {pin["repo"] for pin in tutorial.get("pins", [])
+                      if pin["source"].startswith("release set")}
     for group in ("apps", "devUtils", "modules", "uiApps"):
         for item in lock.get(group, []):
             covering = selector.specs_covering(item["name"], lock)
+            if item.get("repo") in tutorial_repos:
+                covering = covering + tutorial["specs"]
             item["validatedBy"] = [
                 {
                     "spec": test["spec"],
@@ -151,13 +158,33 @@ def skips_section(tests):
     if not skipped:
         return ""
     rows = ["### ⚠️ Not validated on all platforms", "",
-            "These doc-tests could not run because the release set pins an "
-            "artifact that is not published for that platform.", "",
+            "These doc-tests did not run on every platform — usually because "
+            "the release set pins an artifact that is not published for it.", "",
             "| Doc-test | Platform | Reason |", "|---|---|---|"]
     for test in skipped:
         rows.append(f"| `{test['spec']}` "
                     f"| {PLATFORM_LABELS.get(test['platform'], test['platform'])} "
                     f"| {test.get('reason', '')} |")
+    return "\n".join(rows) + "\n"
+
+
+def tutorial_section(tutorial):
+    if not tutorial:
+        return ""
+    tag = f"`{tutorial['tag']}` " if tutorial.get("tag") else ""
+    commit = link(f"`{short(tutorial['commit'])}`",
+                  f"{tutorial['repoUrl']}/commit/{tutorial['commit']}")
+    rows = ["### Tutorial", "",
+            f"{link(tutorial['name'], tutorial['repoUrl'])} {tag}@ {commit}. "
+            "Its specs (`tutorial-*` above) built against these repos — the "
+            "release set's own version wherever it pins one:", "",
+            "| Repo | Ref | Commit | From |", "|---|---|---|---|"]
+    for pin in tutorial["pins"]:
+        shown = pin["ref"] if pin["ref"] != pin["commit"] else short(pin["commit"])
+        pin_commit = link(f"`{short(pin['commit'])}`",
+                          f"{pin['repoUrl']}/commit/{pin['commit']}")
+        rows.append(f"| {link(pin['name'], pin['repoUrl'])} | `{shown}` "
+                    f"| {pin_commit} | {pin['source']} |")
     return "\n".join(rows) + "\n"
 
 
@@ -190,6 +217,8 @@ def render(lock):
         package_table(lock.get("modules"), "Modules"),
         "",
         package_table(lock.get("uiApps"), "UI apps"),
+        "",
+        tutorial_section(lock.get("tutorial")),
         "",
         "---",
         "",

@@ -14,6 +14,8 @@ run-name: "Release set from ${{ github.ref_name }}"
 #                  macOS arm64, using only released binaries and catalog
 #                  packages. Specs whose artifacts are missing for a platform
 #                  are skipped, not failed.
+#      tutorial  — logos-tutorial's specs at the pinned commit, built against
+#                  the versions this release set pins.
 #   3. publish   — on green, a GitHub release with the lock, the reports, and
 #                  a description linking every artifact.
 
@@ -43,6 +45,10 @@ jobs:
     timeout-minutes: 20
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      tutorial_matrix: ${{ steps.tutorial.outputs.matrix }}
+      tutorial_any: ${{ steps.tutorial.outputs.any }}
+      tutorial_repo: ${{ steps.tutorial.outputs.repo }}
+      tutorial_commit: ${{ steps.tutorial.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
 
@@ -82,10 +88,33 @@ jobs:
                   print(f"- {gap['reason']}")
           PY
 
+      # Every repo the tutorial builds against was pinned by resolve.py — to
+      # this release set's version where it has one. Hand those pins over as a
+      # {repo: ref} map the tutorial's own tutorial-set.py applies.
+      - name: Plan the tutorial run
+        id: tutorial
+        run: |
+          python3 scripts/tutorial-plan.py release-set.lock.json \
+            --override-out tutorial-pins.json \
+            --skips-out results-tutorial-skipped.json \
+            --format github >> "$GITHUB_OUTPUT"
+          { echo; echo "### Tutorial"; echo
+            python3 scripts/tutorial-plan.py release-set.lock.json; } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: release-set-lock
-          path: release-set.lock.json
+          path: |
+            release-set.lock.json
+            tutorial-pins.json
+          if-no-files-found: error
+
+      # Platforms the tutorial does not run on, recorded as skips so the
+      # release notes name them.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results-tutorial-skipped
+          path: results-tutorial-skipped.json
           if-no-files-found: error
 
   # One job per spec per platform, rather than one job that runs all five specs
@@ -190,36 +219,7 @@ jobs:
           RUNNER_LABEL: ${{ matrix.platform.runner }}
           # Must match where the publish job arranges the reports for gh-pages.
           PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.run_id }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          spec     = os.environ["SPEC"]
-          platform = os.environ["PLATFORM"]
-          runner   = os.environ["RUNNER_LABEL"]
-          # One report per (spec, platform), so every cell of the validation
-          # table links to the report for exactly that cell.
-          base = f'{os.environ["PAGES_BASE"].rstrip("/")}/{platform}/{spec}/'
-
-          skipped = json.loads(os.environ.get("SKIPPED") or "[]")
-          if skipped:
-              # select-specs already explained why, per platform.
-              results = skipped
-          elif os.environ.get("DESELECTED") == "true":
-              results = [{"spec": spec, "platform": platform, "status": "skipped",
-                          "reason": "not in the requested spec list"}]
-          else:
-              status = {"success": "passed", "failure": "failed",
-                        "skipped": "skipped", "": "skipped"}.get(os.environ["OUTCOME"], "failed")
-              results = [{"spec": spec, "platform": platform,
-                          "status": status, "reportUrl": base}]
-
-          for entry in results:
-              entry.setdefault("runner", runner)
-
-          with open(f"results-{platform}-{spec}.json", "w") as handle:
-              json.dump(results, handle, indent=2)
-          print(json.dumps(results, indent=2))
-          PY
+        run: python3 scripts/record-result.py
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -235,12 +235,105 @@ jobs:
           path: ${{ runner.temp }}/reports/
           if-no-files-found: warn
 
+  # One job per tutorial spec per platform, like the doctests above. The specs
+  # and platforms come from the tutorial's tutorial-set.json at the pinned
+  # commit, so a tutorial added there is validated here without editing this
+  # file.
+  tutorial:
+    name: ${{ matrix.spec }} (${{ matrix.platform }})
+    needs: resolve
+    if: needs.resolve.outputs.tutorial_any == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.tutorial_matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.resolve.outputs.tutorial_repo }}
+          ref: ${{ needs.resolve.outputs.tutorial_commit }}
+          path: tutorial
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-set-lock
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-substituters = https://cache.nix.logos.co/public
+            extra-trusted-public-keys = public:Z1wyVBEx8PHbXujYB52Mysv9Rd8rWIhyQ3bQyef9yy4=
+            fallback = true
+
+      - name: Decide whether this spec was requested
+        id: select
+        env:
+          SPECS_INPUT: ${{ inputs.specs }}
+        run: |
+          if [ -n "$SPECS_INPUT" ]; then
+            case " $SPECS_INPUT " in
+              *" ${{ matrix.spec }} "*) ;;
+              *) echo "deselected=true" >> "$GITHUB_OUTPUT"
+                 echo "not in the requested spec list — not running" ;;
+            esac
+          fi
+
+      - name: Run the tutorial
+        id: run
+        if: steps.select.outputs.deselected != 'true'
+        working-directory: tutorial
+        run: |
+          python3 scripts/tutorial-set.py pins --override ../tutorial-pins.json
+          read -r -a pins <<< "$(python3 scripts/tutorial-set.py doctest-args --override ../tutorial-pins.json)"
+          mkdir -p "${{ runner.temp }}/reports"
+          nix run github:logos-co/logos-doctest -- run \
+            "tests/${{ matrix.spec }}.test.yaml" \
+            ${pins[@]+"${pins[@]}"} \
+            --verbose \
+            --continue-on-fail \
+            --report "${{ runner.temp }}/reports/index.html"
+
+      - name: Record the results
+        if: always()
+        env:
+          OUTCOME: ${{ steps.run.outcome }}
+          DESELECTED: ${{ steps.select.outputs.deselected }}
+          SPEC: ${{ matrix.spec }}
+          PLATFORM: ${{ matrix.platform }}
+          RUNNER_LABEL: ${{ matrix.runner }}
+          PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.run_id }}
+        run: python3 scripts/record-result.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.platform }}-${{ matrix.spec }}
+          path: results-${{ matrix.platform }}-${{ matrix.spec }}.json
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports-${{ matrix.platform }}-${{ matrix.spec }}
+          path: ${{ runner.temp }}/reports/
+          if-no-files-found: warn
+
   publish:
     name: Publish the release set
-    needs: [resolve, doctests]
+    needs: [resolve, doctests, tutorial]
     # Only a fully green run publishes. Placeholders on main never get this far
-    # — the resolve job fails first.
-    if: ${{ success() && !inputs.dry_run && github.ref_name != 'main' && github.ref_name != 'master' }}
+    # — the resolve job fails first. The tutorial job is skipped, not failed,
+    # when the release set pins no tutorial.
+    if: >-
+      ${{ !cancelled() && !inputs.dry_run
+          && needs.resolve.result == 'success'
+          && needs.doctests.result == 'success'
+          && (needs.tutorial.result == 'success' || needs.tutorial.result == 'skipped')
+          && github.ref_name != 'main' && github.ref_name != 'master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

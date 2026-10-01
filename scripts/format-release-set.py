@@ -79,6 +79,12 @@ def render(spec):
             out.append(f"    {q(k)}: {json.dumps(v, ensure_ascii=False)}{comma}")
         out.append("  },")
 
+    tutorial = spec.get("tutorial")
+    if tutorial is not None:
+        fields = ", ".join(f"{q(k)}: {q(v)}" for k, v in tutorial.items())
+        out.append("")
+        out.append(f'  "tutorial": {{ {fields} }},')
+
     for gi, group in enumerate(ORDER):
         if group not in spec:
             continue

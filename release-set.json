@@ -10,6 +10,8 @@
     "logosRepoUrl": "https://raw.githubusercontent.com/logos-co/logos-modules-release/refs/heads/main/logos-repo.json"
   },
 
+  "tutorial": { "repo": "logos-co/logos-tutorial", "ref": "CHANGE-ME" },
+
   "apps": [
     { "name": "logos-basecamp",           "repo": "logos-co/logos-basecamp",           "releaseTag": "CHANGE-ME" },
     { "name": "logos-logoscore-cli",      "repo": "logos-co/logos-logoscore-cli",      "releaseTag": "CHANGE-ME" },
