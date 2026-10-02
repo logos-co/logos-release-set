@@ -5,7 +5,7 @@ one file naming the exact release of every Logos component that is published and
 supported as a unit, plus the machinery to prove that set actually works.
 
 ```
-release-set.json          what a human pins   (6 tags + 13 versions + the tutorial)
+release-set.json          what a human pins   (6 tags + 15 versions + the tutorial)
         │
         │  scripts/resolve.py
         ▼
@@ -83,7 +83,10 @@ in `logos-modules-release` at the package's release tag:
 The module-name → submodule-directory mapping is read from each submodule's own
 `metadata.json` at its pinned commit, never inferred from naming conventions —
 `lez_core` lives in `logos-execution-zone-module`, and the LEZ
-directories drop the `logos-` prefix entirely.
+directories drop the `logos-` prefix entirely. A submodule that holds several
+modules lists each subdirectory as a `module = <dir>` line in the catalog's
+`.gitmodules`, and each `<dir>/metadata.json` names one: both RLN modules come
+from `logos-rln-modules`.
 
 `sha256` is best-effort: the catalog publishes one for every `.lgx`, GitHub
 release assets often do not. When it is unavailable the field is omitted rather
