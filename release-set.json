@@ -10,7 +10,7 @@
     "logosRepoUrl": "https://raw.githubusercontent.com/logos-co/logos-modules-release/refs/heads/main/logos-repo.json"
   },
 
-  "tutorial": { "repo": "logos-co/logos-tutorial", "ref": "7a6bb0d61dd756f4355f28f382d1deda8d0efa01" },
+  "tutorial": { "repo": "logos-co/logos-tutorial", "ref": "0c46d03ab73630351cc9415b940ed584f81aea56" },
 
   "apps": [
     { "name": "logos-basecamp",        "repo": "logos-co/logos-basecamp",        "releaseTag": "0.3.1" },
