@@ -64,6 +64,8 @@ def main():
     if tutorial:
         for spec in tutorial["specs"]:
             for platform in lock["platforms"]:
+                if platform == WINDOWS:
+                    continue  # its own legs, below
                 if platform in tutorial["platforms"] and platform in RUNNERS:
                     include.append({"spec": spec, "platform": platform,
                                     "runner": RUNNERS[platform]})
@@ -74,7 +76,7 @@ def main():
                                   "(tutorial-set.json platforms)",
                     })
 
-    # Windows is not a release-set platform; only the tutorial's legs run it.
+    # Windows runs only the legs tutorial-set.json lists, through logos-windows-ci.
     windows = []
     requested = set(args.specs.split())
     if tutorial:

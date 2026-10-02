@@ -51,10 +51,11 @@ def attach_validation(lock):
     spec_repos = tutorial.get("specRepos", {})
     for group in ("apps", "devUtils", "tools", "modules", "uiApps"):
         for item in lock.get(group, []):
-            covering = selector.specs_covering(item["name"], lock)
+            tutorial_specs = []
             if item.get("repo") in pinned:
-                covering = covering + sorted(spec for spec, repos in spec_repos.items()
-                                             if item["repo"] in repos)
+                tutorial_specs = sorted(spec for spec, repos in spec_repos.items()
+                                        if item["repo"] in repos)
+            # Per platform: a spec's Windows half exercises less than the rest.
             item["validatedBy"] = [
                 {
                     "spec": test["spec"],
@@ -63,14 +64,14 @@ def attach_validation(lock):
                     "reportUrl": test.get("reportUrl"),
                 }
                 for test in lock.get("tests", [])
-                if test["spec"] in covering
+                if test["spec"] in tutorial_specs
+                or test["spec"] in selector.specs_covering(item["name"], lock, test["platform"])
             ]
 
 PLATFORM_LABELS = {
     "linux-x86_64": "linux x86_64",
     "linux-arm64": "linux arm64",
     "macos-arm64": "macOS arm64",
-    # Recognised but not yet a release gate — see KNOWN_PLATFORMS in resolve.py.
     "windows-x86_64": "windows x86_64",
 }
 
@@ -156,11 +157,13 @@ def results_table(tests):
 
 
 def windows_note(tests):
-    if not any(t["platform"] == "windows-x86_64" for t in tests):
+    if not any(t["platform"] == "windows-x86_64" and t["status"] != "skipped" for t in tests):
         return ""
-    return ("Windows is validated only by the tutorial's Windows legs: Nix does not "
-            "run there, so each is cross-built on Linux and run on `windows-latest`. "
-            "The release set's own doc-tests do not run on Windows (`—`).\n")
+    return ("Nix does not run on Windows, so each Windows leg is built on Linux and "
+            "run on `windows-latest`, executing the steps its spec marks for Windows. "
+            "The release set's own legs run the released `logosctl` zip and the "
+            "catalog's modules, with each spec's probe cross-built by the pinned "
+            "builder.\n")
 
 
 def skips_section(tests):

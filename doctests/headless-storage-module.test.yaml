@@ -25,6 +25,12 @@ intro: |
   A green run means the pinned storage module is installable, loadable,
   callable, emits the events other modules depend on, and reports metrics.
 
+  The spec runs on Windows too. Nix does not run there, so CI prepares that leg
+  on Linux: it unpacks the pinned release's `logosctl-x86_64-windows.zip` and
+  cross-builds the probe with the pinned builder, then runs the steps marked
+  for Windows on `windows-latest`. `openmetrics` publishes no Windows build, so
+  the metrics section runs on Linux and macOS only.
+
 what_you_build: "The pinned `storage_module`, installed from the catalog and driven through a `logosctl` daemon and a purpose-built probe module."
 
 what_you_learn:
@@ -34,11 +40,13 @@ what_you_learn:
   - How to observe a module's events with `logosctl watch`
   - How to build a probe module that calls a dependency and subscribes to its events
   - Which module serves `/metrics`, and how it scrapes others over IPC
+  - How the Windows half runs on artifacts CI prepares on Linux
 
 prerequisites:
   - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
   - "**Nix** with flakes enabled — used only to build the probe module; the tool and modules under test come from released binaries."
   - "**`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API)."
+  - "**For the Windows half**, Git Bash with `curl` and `jq`, in a directory holding this repository's `flake.nix` targets as `logos-windows-ci` stages them: `release-set/`, `logosctl/` and `probe-storage/`."
 
 sections:
   - title: "Resolve the release set"
@@ -51,6 +59,7 @@ sections:
       doc-test is pinned to one immutable set.
     steps:
       - title: "Resolve"
+        platform: [linux, macos]
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" lock'
         code_block: "./doctests/release-set.sh lock"
         check_file: "release-set.lock.json"
@@ -59,6 +68,16 @@ sections:
           catalog packages that commit is the submodule gitlink in
           `logos-modules-release` at the package's release tag — the exact source
           the `.lgx` was built from.
+      - title: "Read the pins"
+        platform: windows
+        text: |
+          Windows resolves nothing. CI read the lock on Linux to pin this leg's
+          inputs, the builder tag and the `logosctl` release, and staged
+          `release-set.json` with a helper that reads it.
+        run: "bash release-set/windows.sh pins"
+        code_block: "bash release-set/windows.sh pins"
+        expect_contains:
+          - "storage_module"
 
   - title: "Fetch the pinned runtime"
     step: true
@@ -75,8 +94,19 @@ sections:
       match the platform.
     steps:
       - title: "Fetch logosctl"
+        platform: [linux, macos]
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logosctl'
         code_block: "./doctests/release-set.sh fetch logos-logoscore-cli logosctl"
+        check_file: "bin/logosctl"
+      - title: "Use the staged release"
+        platform: windows
+        text: |
+          On Windows the pinned release's `logosctl-x86_64-windows.zip` is
+          already here, unpacked as `logosctl/`. The helper writes the same
+          `./bin/logosctl` wrapper as `fetch` does elsewhere; `logosctl.exe`
+          stays in its bundle, next to `logos_host.exe` and the modules it ships.
+        run: "bash release-set/windows.sh link logosctl"
+        code_block: "bash release-set/windows.sh link logosctl"
         check_file: "bin/logosctl"
       - title: "Confirm the version"
         run: "./bin/logosctl --version"
@@ -105,9 +135,20 @@ sections:
           is up, the package downloader starts the storage node with its default
           configuration, which keeps the node's data in `~/.logos_storage`; this
           keeps a run clear of a real node there, such as Basecamp's.
+        platform: [linux, macos]
         run: |
           mkdir -p home
           HOME="$(pwd)/home" ./bin/logosctl --config-dir ./session daemon start --detach
+        code_block: "logosctl --config-dir ./session daemon start --detach"
+      - title: "Start the daemon"
+        platform: windows
+        text: |
+          The same command. `logosctl` is a native Windows program, so `HOME`
+          is given in Windows form; the storage module reads it before
+          `USERPROFILE`.
+        run: |
+          mkdir -p home
+          HOME="$(cygpath -m "$PWD")/home" ./bin/logosctl --config-dir ./session daemon start --detach
         code_block: "logosctl --config-dir ./session daemon start --detach"
       - title: "Confirm it is up"
         run: "./bin/logosctl --config-dir ./session daemon status"
@@ -140,6 +181,7 @@ sections:
       the package's own manifest, so there is no target directory to pass.
     steps:
       - title: "Download, verify and install"
+        platform: [linux, macos]
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" ctl-install storage_module'
         code_block: |
           logosctl package download storage_module --version <pinned> -o packages
@@ -147,10 +189,23 @@ sections:
         expect_contains:
           - "sha256 OK"
           - '"installed":['
+      - title: "Download, verify and install"
+        platform: windows
+        text: |
+          The same two commands. With no lock on Windows, the helper takes the
+          expected `sha256` from the catalog index the resolver reads.
+        run: "bash release-set/windows.sh ctl-install storage_module"
+        code_block: |
+          logosctl package download storage_module --version <pinned> -o packages
+          logosctl package install --file packages/storage_module-*.lgx -y
+        expect_contains:
+          - "sha256 OK"
+          - '"installed":['
       - title: "Install the metrics scraper too"
+        platform: [linux, macos]
         text: |
           `openmetrics` is the module that serves the `/metrics` endpoint later
-          in this doc-test.
+          in this doc-test. It publishes no Windows build.
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" ctl-install openmetrics'
         code_block: |
           logosctl package download openmetrics --version <pinned> -o packages
@@ -168,10 +223,10 @@ sections:
         code_block: "logosctl package ls"
         expect_contains:
           - "storage_module"
-          - "openmetrics"
 
   - title: "Build a probe module with the pinned module-builder"
     step: true
+    platform: [linux, macos]
     text: |
       Calling a module from the CLI proves it answers. It does not prove that
       *another module* can consume it — the path every real application uses.
@@ -186,34 +241,19 @@ sections:
     steps:
       - title: "Write the dependency contract"
         text: |
-          Only the subset the probe uses, pinned to the version in the release
-          set. `logos-lidl` turns this into a typed client for the probe.
-        run: |
-          mkdir -p probe/src probe/deps
-          VER="$("$RELEASE_SET_DIR/doctests/release-set.sh" pin modules storage_module)"
-          cat > probe/deps/storage_module.lidl <<EOF
-          ; The subset of storage_module this probe uses, supplied as a
-          ; dependency_override so the probe never builds storage_module itself.
-          module storage_module {
-            version "$VER"
+          Only the subset the probe uses. `logos-lidl` turns this into a typed
+          client for the probe.
+        file:
+          path: probe/deps/storage_module.lidl
+          content: |
+            ; The subset of storage_module this probe uses, supplied as a
+            ; dependency_override so the probe never builds storage_module itself.
+            module storage_module {
+              method moduleVersion() -> tstr
+              method uploadUrl(filePath: tstr, chunkSize: int, advertise: bool) -> result
 
-            method moduleVersion() -> tstr
-            method uploadUrl(filePath: tstr, chunkSize: int, advertise: bool) -> result
-
-            event storageUploadDone(payload: tstr)
-          }
-          EOF
-          cat probe/deps/storage_module.lidl
-        code_block: |
-          module storage_module {
-            version "<pinned>"
-
-            method moduleVersion() -> tstr
-            method uploadUrl(filePath: tstr, chunkSize: int, advertise: bool) -> result
-
-            event storageUploadDone(payload: tstr)
-          }
-        check_file: "probe/deps/storage_module.lidl"
+              event storageUploadDone(payload: tstr)
+            }
 
       - title: "Declare the module"
         file:
@@ -372,24 +412,31 @@ sections:
           variant; a dev build would RPATH into `/nix/store` and refuse to load
           beside them.
           Nix only sees files git knows about, so the probe is committed first.
+          The link is named after the target CI cross-builds for Windows, so
+          the next step reads the same path on every platform.
         run: |
           cd probe
           git init -q . && git add -A
-          nix build '.#lgx-portable' --no-write-lock-file -o probe-lgx
-          ls probe-lgx/*.lgx
+          nix build '.#lgx-portable' --no-write-lock-file -o ../probe-storage
+          ls ../probe-storage/*.lgx
         code_block: |
           git init && git add -A
-          nix build '.#lgx-portable' -o probe-lgx
-        check_file: "probe/probe-lgx"
+          nix build '.#lgx-portable' -o ../probe-storage
+        check_file: "probe-storage"
 
       - title: "Install the probe"
+        platform: [linux, macos, windows]
         text: |
           A path ending in `.lgx` is read as a file, so this never touches the
           catalog. The probe is unsigned and installs anyway: the session's
           `signature_policy` defaults to `warn`, which is what a locally built
           module needs.
-        run: "./bin/logosctl --config-dir ./session package install --file probe/probe-lgx/*.lgx -y"
-        code_block: "logosctl package install --file probe/probe-lgx/*.lgx -y"
+
+          On Windows, `probe-storage/` holds the probe CI cross-built with the
+          same pinned builder from `doctests/probes/storage`: the files above,
+          which `scripts/check-probes.py` keeps identical to this spec.
+        run: "./bin/logosctl --config-dir ./session package install --file probe-storage/*.lgx -y"
+        code_block: "logosctl package install --file probe-storage/*.lgx -y"
         expect_contains:
           - '"installed":['
 
@@ -512,6 +559,7 @@ sections:
 
   - title: "Expose the metrics endpoint"
     step: true
+    platform: [linux, macos]
     text: |
       `/metrics` is served by the **`openmetrics`** module itself: it runs an HTTP
       server (libmicrohttpd) and, on every scrape, calls the metrics convention

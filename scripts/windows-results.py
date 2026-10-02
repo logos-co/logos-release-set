@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Results for the tutorial's Windows legs, from their execution records.
+"""Results for the Windows legs, from their execution records.
+
+Both kinds: the release set's own specs (doctests-windows) and the tutorial's
+(tutorial-windows).
 
 logos-windows-ci runs each leg as a reusable workflow, so the calling job has no
 step of its own whose outcome says pass or fail. What every leg does leave is

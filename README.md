@@ -100,8 +100,9 @@ python3 scripts/resolve.py release-set.json -o release-set.lock.json \
 
 ## The proof: `doctests/`
 
-Five executable specs, run on **linux-x86_64, linux-arm64 and macOS arm64**.
-They use only released artifacts: tools downloaded from GitHub releases at the
+Five executable specs, run on **linux-x86_64, linux-arm64 and macOS arm64**;
+the storage and delivery specs also run on **Windows x86_64** (see
+[Windows](#windows)). They use only released artifacts: tools downloaded from GitHub releases at the
 pinned tags, modules installed from the catalog at the pinned versions and
 checksum-verified on the way in.
 
@@ -157,6 +158,33 @@ before it launches.
 Everything is the **portable** variant, end to end. A dev build RPATHs into
 `/nix/store` and will not load beside portable catalog packages, so probes build
 `#lgx-portable` and the Basecamp under test is the portable bundle.
+
+### Windows
+
+`headless-storage-module` and `headless-delivery-module` also run on Windows.
+Nix does not run there, so the `doctests-windows` job calls
+[logos-windows-ci](https://github.com/logos-co/logos-windows-ci). It builds this
+repo's `flake.nix` on Linux and stages each target as a directory beside the
+script it generates from the spec's Windows steps:
+
+| Target | What it holds |
+|---|---|
+| `logosctl` | The pinned release's `logosctl-x86_64-windows.zip`, unpacked: the artifact users download, not a build of it |
+| `probe-storage`, `probe-delivery` | The spec's probe, cross-built with the pinned builder from `doctests/probes/` |
+| `release-set` | `release-set.json`, and `doctests/windows.sh` to read it: Windows has no lock |
+
+`scripts/windows-plan.py` pins the flake to the release set with
+`--override-input` (the builder tag, and the zip's URL from the lock) and
+decides which specs get a Windows leg. On Windows the helper downloads the
+pinned modules with `logosctl` and checks each `.lgx` against the `sha256` the
+catalog index publishes, the index the resolver reads. `openmetrics` publishes
+no Windows build, so the metrics sections run on Linux and macOS only. The
+other specs have no Windows half (`blockchain_module` publishes no Windows
+build either), so they are skips that say so.
+
+The probe sources live twice: inline in the specs, which build them on Linux and
+macOS, and in `doctests/probes/`, which the flake cross-builds.
+`scripts/check-probes.py` fails the resolve job if the two differ.
 
 ### Two things that look like details and are not
 
@@ -216,17 +244,17 @@ platform the tutorial does not list is a skip with that reason, not a failure.
 An artifact whose repo the tutorial built against at the release set's version
 lists the tutorial's reports in its `validatedBy`.
 
-**Windows.** The release set validates Windows only through the tutorial's
-Windows legs (the `windows` entries of its `tutorial-set.json`). Nix does not
-run on Windows, so the `tutorial-windows` job calls
+**Windows.** The tutorial's Windows legs are the `windows` entries of its
+`tutorial-set.json`. The `tutorial-windows` job calls
 [logos-windows-ci](https://github.com/logos-co/logos-windows-ci) with
 `repository`/`ref` set to the pinned tutorial commit: it cross-builds the
 tutorial's `flake.nix` on Linux, pinned with this release set's versions as
 `--override-input` pairs (computed by the tutorial's own
 `tutorial-set.py override-inputs`), and runs each spec's Windows half on
-`windows-latest`. `scripts/windows-results.py` reads each leg's execution
-records into a `windows-x86_64` result: a leg with no records failed. Tutorial
-specs without a Windows leg are skips; the release set's own doc-tests show `—`.
+`windows-latest`. `scripts/windows-results.py` reads the execution records of
+every Windows leg, the tutorial's and the release set's own, into a
+`windows-x86_64` result: a leg with no records failed. Tutorial specs without a
+Windows leg are skips.
 
 The tutorial at the pinned commit must work with the pinned versions — it
 tracks its dependencies' default branches, so pick a commit from when they
@@ -245,8 +273,9 @@ export RELEASE_SET_DIR="$PWD" GITHUB_TOKEN=...
 `.github/workflows/release-set.yml`, **manual only** (`workflow_dispatch`):
 
 1. **resolve** — every pin, or fail fast listing each unresolved `CHANGE-ME`.
-2. **doctests** and **tutorial** — the three platforms in parallel; the
-   tutorial on the platforms its `tutorial-set.json` lists. If the set pins an artifact
+2. **doctests** and **tutorial** — the three platforms in parallel, plus the
+   Windows legs (`doctests-windows`, `tutorial-windows`); the tutorial on the
+   platforms its `tutorial-set.json` lists. If the set pins an artifact
    that a platform does not publish, the affected spec is **skipped, not
    failed** — a release with no linux-arm64 AppImage leaves nothing to
    smoke-test there, which is not a failure of the release set. Skipping is
@@ -271,13 +300,18 @@ and Basecamp's AppImages alone are ~270 MB each.
 
 ```
 release-set.json                    the input — placeholders on main
+flake.nix                           what the Windows legs stage: logosctl, probes, pins
 scripts/resolve.py                  pins  -> release-set.lock.json
 scripts/select-specs.py             which specs can run on a platform, and why not
 scripts/render-release.py           lock + results -> release notes
 scripts/tutorial-plan.py            lock -> tutorial matrix, pins, skips
+scripts/windows-plan.py             lock -> Windows matrix, flake pins, skips
+scripts/check-probes.py             the specs' probes == doctests/probes/
 scripts/record-result.py            one job's outcome -> results-<platform>-<spec>.json
-scripts/windows-results.py          Windows legs' records -> results-windows-x86_64-*.json
+scripts/windows-results.py          Windows legs' records -> results-windows-x86_64.json
 doctests/release-set.sh             fetch/install helper the specs drive
+doctests/windows.sh                 its Windows half, reading release-set.json
+doctests/probes/                    the probe sources flake.nix cross-builds
 doctests/*.test.yaml                the five specs
 doctests/run.sh                     run them locally
 .github/workflows/release-set.yml   resolve -> validate -> publish

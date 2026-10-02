@@ -1,0 +1,24 @@
+{
+  "name": "probe_delivery",
+  "display_name": "Delivery Probe",
+  "version": "1.0.0",
+  "type": "core",
+  "interface": "universal",
+  "category": "test",
+  "description": "Calls delivery_module and latches its nodeStarted event.",
+  "main": "probe_delivery_plugin",
+  "dependencies": ["delivery_module"],
+  "dependency_overrides": {
+    "delivery_module": { "file": "deps/delivery_module.lidl" }
+  },
+  "nix": {
+    "packages": { "build": [], "runtime": [] },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}
