@@ -1,0 +1,8 @@
+; The subset of storage_module this probe uses, supplied as a
+; dependency_override so the probe never builds storage_module itself.
+module storage_module {
+  method moduleVersion() -> tstr
+  method uploadUrl(filePath: tstr, chunkSize: int, advertise: bool) -> result
+
+  event storageUploadDone(payload: tstr)
+}

@@ -33,15 +33,24 @@ BUILDER = ["logos-module-builder"]
 #   devUtils  — dev utils the spec exercises. Not gating (they are consumed as
 #               flake refs and publish no per-platform binaries), but recorded
 #               so each artifact can point at the doc-tests that covered it.
+#   windows   — the spec's Windows half, if it has one: what that half needs
+#               instead of `packages`, and the flake.nix targets its leg stages
+#               besides logosctl/ and release-set/. A spec without one is
+#               skipped on Windows.
 SPECS = {
     # Each headless spec also loads `openmetrics` and scrapes /metrics, so that
-    # package must publish this platform's variant too.
+    # package must publish this platform's variant too. It publishes no Windows
+    # build, so the specs' metrics sections are Linux and macOS only.
     "headless-storage-module":    {"apps": CTL,
                                    "packages": ["storage_module", "openmetrics"],
-                                   "devUtils": BUILDER},
+                                   "devUtils": BUILDER,
+                                   "windows": {"packages": ["storage_module"],
+                                               "targets": ["probe-storage"]}},
     "headless-delivery-module":   {"apps": CTL,
                                    "packages": ["delivery_module", "openmetrics"],
-                                   "devUtils": BUILDER},
+                                   "devUtils": BUILDER,
+                                   "windows": {"packages": ["delivery_module"],
+                                               "targets": ["probe-delivery"]}},
     "headless-blockchain-module": {"apps": CTL,
                                    "packages": ["blockchain_module", "openmetrics"],
                                    "devUtils": BUILDER},
@@ -53,12 +62,20 @@ SPECS = {
 }
 
 
-def specs_covering(name, lock):
-    """Which doc-tests exercise this component."""
+WINDOWS = "windows-x86_64"
+
+
+def specs_covering(name, lock, platform=None):
+    """Which doc-tests exercise this component (on `platform`, if given)."""
     every_package = [i["name"] for i in lock.get("modules", []) + lock.get("uiApps", [])]
     covering = []
     for spec, needs in sorted(SPECS.items()):
-        packages = every_package if needs["packages"] == ["*"] else needs["packages"]
+        packages = needs["packages"]
+        if platform == WINDOWS:
+            if "windows" not in needs:
+                continue
+            packages = needs["windows"]["packages"]
+        packages = every_package if packages == ["*"] else packages
         if name in needs["apps"] or name in packages or name in needs.get("devUtils", []):
             covering.append(spec)
     return covering
@@ -74,10 +91,19 @@ def index_by_name(lock):
 
 def missing_for(spec, lock, entries, platform):
     """Reasons this spec cannot run on this platform. Empty list = it can."""
-    reasons = []
     needs = SPECS[spec]
+    if platform == WINDOWS and "windows" not in needs:
+        # Say whether the artifacts such a half would need exist there at all.
+        gaps = artifact_gaps(needs["apps"], needs["packages"], lock, entries, platform)
+        return ["the spec has no Windows half" + (f"; {gaps[0]}" if gaps else "")]
+    packages = needs["windows"]["packages"] if platform == WINDOWS else needs["packages"]
+    return artifact_gaps(needs["apps"], packages, lock, entries, platform)
 
-    for name in needs["apps"]:
+
+def artifact_gaps(apps, packages, lock, entries, platform):
+    """The named artifacts that publish nothing for this platform."""
+    reasons = []
+    for name in apps:
         item = entries.get(name)
         if item is None:
             reasons.append(f"{name} is not in the release set")
@@ -87,7 +113,6 @@ def missing_for(spec, lock, entries, platform):
             label = item.get("tag") or item.get("version")
             reasons.append(f"no {platform} artifact published for {name}@{label}")
 
-    packages = needs["packages"]
     if packages == ["*"]:
         packages = [i["name"] for i in lock.get("modules", []) + lock.get("uiApps", [])]
     for name in packages:

@@ -14,8 +14,9 @@ run-name: "Release set from ${{ github.ref_name }}"
 #                  macOS arm64, using only released binaries and catalog
 #                  packages. Specs whose artifacts are missing for a platform
 #                  are skipped, not failed.
+#      doctests-windows — the specs with a Windows half, on windows-latest.
 #      tutorial  — logos-tutorial's specs at the pinned commit, built against
-#                  the versions this release set pins.
+#                  the versions this release set pins, Windows legs included.
 #   3. publish   — on green, a GitHub release with the lock, the reports, and
 #                  a description linking every artifact.
 
@@ -52,6 +53,9 @@ jobs:
       tutorial_windows_matrix: ${{ steps.tutorial.outputs.windows_matrix }}
       tutorial_windows_any: ${{ steps.tutorial.outputs.windows_any }}
       tutorial_override_inputs: ${{ steps.overrides.outputs.args }}
+      windows_matrix: ${{ steps.windows.outputs.matrix }}
+      windows_any: ${{ steps.windows.outputs.any }}
+      windows_override_inputs: ${{ steps.windows.outputs.args }}
     steps:
       - uses: actions/checkout@v4
 
@@ -60,6 +64,14 @@ jobs:
       # before anything is downloaded.
       - name: Check release-set.json is canonically formatted
         run: python3 scripts/format-release-set.py --check
+
+      # The Windows legs install probes cross-built from doctests/probes/; the
+      # other platforms build what the specs write. A drift between the two
+      # would validate a different module on Windows.
+      - name: Check the probe sources match the specs
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y python3-yaml
+          python3 scripts/check-probes.py
 
       - name: Resolve every pin
         id: resolve
@@ -125,12 +137,33 @@ jobs:
           echo "args=$args" >> "$GITHUB_OUTPUT"
           echo "$args"
 
+      # The release set's own specs with a Windows half, and the flake inputs
+      # that pin flake.nix to this release set for their cross-build.
+      - name: Plan the Windows legs
+        id: windows
+        env:
+          SPECS_INPUT: ${{ inputs.specs }}
+        run: |
+          python3 scripts/windows-plan.py release-set.lock.json \
+            --specs "$SPECS_INPUT" \
+            --skips-out results-windows-x86_64-skipped.json \
+            --format github >> "$GITHUB_OUTPUT"
+          { echo; echo "### Windows"; echo; echo '```'
+            python3 scripts/windows-plan.py release-set.lock.json --specs "$SPECS_INPUT"
+            echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: release-set-lock
           path: |
             release-set.lock.json
             tutorial-pins.json
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results-windows-x86_64-skipped
+          path: results-windows-x86_64-skipped.json
           if-no-files-found: error
 
       # Platforms the tutorial does not run on, recorded as skips so the
@@ -338,10 +371,31 @@ jobs:
           path: ${{ runner.temp }}/reports/
           if-no-files-found: warn
 
-  # The release set validates Windows only through the tutorial's Windows legs.
-  # Nix does not run on Windows: logos-windows-ci cross-builds the tutorial's
-  # flake on Linux at the pinned commit, with this release set's pins, and runs
-  # each spec's Windows half on windows-latest.
+  # Nix does not run on Windows. logos-windows-ci builds this repo's flake.nix
+  # on Linux, pinned to this release set: the released logosctl Windows zip
+  # and the specs' probes, cross-built with the pinned builder. It then runs
+  # each spec's Windows half against them on windows-latest.
+  doctests-windows:
+    name: ${{ matrix.spec }} (windows-x86_64)
+    needs: resolve
+    if: needs.resolve.outputs.windows_any == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.windows_matrix) }}
+    uses: logos-co/logos-windows-ci/.github/workflows/windows-ci.yml@v1
+    secrets: inherit
+    with:
+      instance: ${{ matrix.spec }}
+      targets: ${{ matrix.targets }}
+      extra-nix-args: ${{ needs.resolve.outputs.windows_override_inputs }}
+      doctest-spec: doctests/${{ matrix.spec }}.test.yaml
+      doctest-artifact: reports-windows-x86_64-${{ matrix.spec }}
+      # The probe .lgx must carry a Windows variant. Its Qt imports come from
+      # the logosctl bundle, whose own imports the default gate checks.
+      lgx-variant: true
+
+  # The same for the tutorial: logos-windows-ci cross-builds the tutorial's
+  # flake at the pinned commit, with this release set's pins.
   tutorial-windows:
     name: ${{ matrix.spec }} (windows-x86_64)
     needs: resolve
@@ -361,11 +415,14 @@ jobs:
       doctest-artifact: reports-windows-x86_64-${{ matrix.spec }}
 
   # A reusable-workflow job has no step of its own to record an outcome from,
-  # so each leg's result is read from the execution records it uploaded.
-  tutorial-windows-results:
-    name: Record the tutorial's Windows results
-    needs: [resolve, tutorial-windows]
-    if: ${{ always() && needs.resolve.outputs.tutorial_windows_any == 'true' }}
+  # so each Windows leg's result is read from the execution records it
+  # uploaded: the release set's own legs and the tutorial's.
+  windows-results:
+    name: Record the Windows results
+    needs: [resolve, doctests-windows, tutorial-windows]
+    if: >-
+      ${{ always() && (needs.resolve.outputs.windows_any == 'true'
+                       || needs.resolve.outputs.tutorial_windows_any == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -378,23 +435,24 @@ jobs:
 
       - name: Record the results
         env:
-          MATRIX: ${{ needs.resolve.outputs.tutorial_windows_matrix }}
+          MATRIX: ${{ needs.resolve.outputs.windows_matrix }}
+          TUTORIAL_MATRIX: ${{ needs.resolve.outputs.tutorial_windows_matrix }}
           PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.run_id }}
           CALLER: ${{ github.event.repository.name }}
         run: |
-          specs="$(python3 -c 'import json,os; print(" ".join(e["spec"] for e in json.loads(os.environ["MATRIX"])["include"]))')"
+          specs="$(python3 -c 'import json,os; print(" ".join(e["spec"] for m in ("MATRIX", "TUTORIAL_MATRIX") for e in json.loads(os.environ.get(m) or "{}").get("include", [])))')"
           python3 scripts/windows-results.py execs --specs "$specs" --caller "$CALLER" \
-            --pages-base "$PAGES_BASE" -o results-windows-x86_64-tutorial.json
+            --pages-base "$PAGES_BASE" -o results-windows-x86_64.json
 
       - uses: actions/upload-artifact@v4
         with:
-          name: results-windows-x86_64-tutorial
-          path: results-windows-x86_64-tutorial.json
+          name: results-windows-x86_64
+          path: results-windows-x86_64.json
           if-no-files-found: error
 
   publish:
     name: Publish the release set
-    needs: [resolve, doctests, tutorial, tutorial-windows-results]
+    needs: [resolve, doctests, tutorial, windows-results]
     # Only a fully green run publishes. Placeholders on main never get this far
     # — the resolve job fails first. The tutorial job is skipped, not failed,
     # when the release set pins no tutorial.
@@ -403,7 +461,7 @@ jobs:
           && needs.resolve.result == 'success'
           && needs.doctests.result == 'success'
           && (needs.tutorial.result == 'success' || needs.tutorial.result == 'skipped')
-          && (needs.tutorial-windows-results.result == 'success' || needs.tutorial-windows-results.result == 'skipped')
+          && (needs.windows-results.result == 'success' || needs.windows-results.result == 'skipped')
           && github.ref_name != 'main' && github.ref_name != 'master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20

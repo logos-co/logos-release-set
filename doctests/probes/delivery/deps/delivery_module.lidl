@@ -1,0 +1,7 @@
+; The subset of delivery_module this probe uses, supplied as a
+; dependency_override so the probe never builds delivery_module itself.
+module delivery_module {
+  method getNodeInfo(nodeInfoId: tstr) -> result
+
+  event nodeStarted(success: bool, message: tstr, timestamp: int)
+}

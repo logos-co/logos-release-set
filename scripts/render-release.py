@@ -51,10 +51,11 @@ def attach_validation(lock):
     spec_repos = tutorial.get("specRepos", {})
     for group in ("apps", "devUtils", "tools", "modules", "uiApps"):
         for item in lock.get(group, []):
-            covering = selector.specs_covering(item["name"], lock)
+            tutorial_specs = []
             if item.get("repo") in pinned:
-                covering = covering + sorted(spec for spec, repos in spec_repos.items()
-                                             if item["repo"] in repos)
+                tutorial_specs = sorted(spec for spec, repos in spec_repos.items()
+                                        if item["repo"] in repos)
+            # Per platform: a spec's Windows half exercises less than the rest.
             item["validatedBy"] = [
                 {
                     "spec": test["spec"],
@@ -63,16 +64,20 @@ def attach_validation(lock):
                     "reportUrl": test.get("reportUrl"),
                 }
                 for test in lock.get("tests", [])
-                if test["spec"] in covering
+                if test["spec"] in tutorial_specs
+                or test["spec"] in selector.specs_covering(item["name"], lock, test["platform"])
             ]
 
 PLATFORM_LABELS = {
     "linux-x86_64": "linux x86_64",
     "linux-arm64": "linux arm64",
     "macos-arm64": "macOS arm64",
-    # Recognised but not yet a release gate — see KNOWN_PLATFORMS in resolve.py.
     "windows-x86_64": "windows x86_64",
 }
+
+
+def platform_order(platform):
+    return list(PLATFORM_LABELS).index(platform) if platform in PLATFORM_LABELS else 99
 
 STATUS_MARK = {"passed": "✅", "failed": "❌", "skipped": "⏭️"}
 
@@ -81,62 +86,75 @@ def short(commit):
     return (commit or "")[:10] or "—"
 
 
-def link(text, url):
-    return f"[{text}]({url})" if url else text
+def link(text, url, title=None):
+    if not url:
+        return text
+    return f'[{text}]({url} "{title}")' if title else f"[{text}]({url})"
+
+
+# The artifact tables' platform columns. Distinct from the validation table's
+# ✅/❌, which say whether a doc-test passed.
+AVAILABLE, MISSING = "✔️", "✖️"
+
+
+def table_head(columns):
+    return ["| " + " | ".join(columns) + " |", "|" + "---|" * len(columns)]
+
+
+def commit_link(item):
+    return link(f"`{short(item.get('commit'))}`",
+                f"{item['repoUrl']}/commit/{item['commit']}"
+                if item.get("commit") and item.get("repoUrl") else None)
 
 
 def binary_table(items, title):
+    """Apps, dev utils and tools: downloads per platform, or a Nix flake."""
     if not items:
         return ""
-    rows = [f"### {title}", "",
-            "| Component | Tag | Commit | Downloads |",
-            "|---|---|---|---|"]
-    for item in items:
-        if item.get("consumedAs") == "flake":
-            downloads = f"`{item.get('flakeRef', '')}`"
-        else:
-            # Label each download by the platform it is for — asset filenames
-            # alone are ambiguous (two of them end in "-linux.tar.gz").
-            downloads = " · ".join(
-                link(PLATFORM_LABELS.get(asset.get("platform"), asset["name"]), asset["url"])
-                for asset in sorted(item.get("assets", []),
-                                    key=lambda a: list(PLATFORM_LABELS).index(a["platform"])
-                                    if a.get("platform") in PLATFORM_LABELS else 99)
-            ) or "—"
-        commit = link(f"`{short(item.get('commit'))}`",
-                      f"{item['repoUrl']}/commit/{item['commit']}" if item.get("commit") else None)
-        rows.append(
-            f"| {link(item['name'], item.get('repoUrl'))} "
-            f"| {link(item.get('tag') or '—', item.get('releaseUrl'))} "
-            f"| {commit} | {downloads} |"
-        )
+    binaries = [i for i in items if i.get("consumedAs") != "flake"]
+    flakes = [i for i in items if i.get("consumedAs") == "flake"]
+    rows = [f"### {title}", ""]
+    if binaries:
+        rows += table_head(["Component", "Version", "Commit"] + list(PLATFORM_LABELS.values()))
+        for item in binaries:
+            # Each mark links to that platform's download; hovering names the file.
+            cells = [" ".join(link(AVAILABLE, a["url"], a["name"]) for a in item.get("assets", [])
+                              if a.get("platform") == platform) or MISSING
+                     for platform in PLATFORM_LABELS]
+            rows.append(f"| {link(item['name'], item.get('repoUrl'))} "
+                        f"| {link(item.get('tag') or '—', item.get('releaseUrl'))} "
+                        f"| {commit_link(item)} | " + " | ".join(cells) + " |")
+    if flakes:
+        if binaries:
+            rows.append("")
+        rows += table_head(["Component", "Version", "Commit", "Nix flake"])
+        for item in flakes:
+            rows.append(f"| {link(item['name'], item.get('repoUrl'))} "
+                        f"| {link(item.get('tag') or '—', item.get('releaseUrl'))} "
+                        f"| {commit_link(item)} | `{item.get('flakeRef', '')}` |")
     return "\n".join(rows) + "\n"
 
 
 def package_table(items, title):
+    """Modules and UI apps: one .lgx each, carrying a variant per platform."""
     if not items:
         return ""
-    rows = [f"### {title}", "",
-            "| Package | Version | Source commit | Package |",
-            "|---|---|---|---|"]
+    rows = [f"### {title}", ""]
+    rows += table_head(["Component", "Version", "Commit", "Package"] + list(PLATFORM_LABELS.values()))
     for item in items:
-        commit = link(f"`{short(item.get('commit'))}`",
-                      f"{item['repoUrl']}/commit/{item['commit']}" if item.get("commit") else None)
+        have = set(item.get("platforms") or [])
+        cells = [AVAILABLE if platform in have else MISSING for platform in PLATFORM_LABELS]
         lgx = (item.get("lgx") or {}).get("url")
-        rows.append(
-            f"| {item['name']} "
-            f"| {link(item['version'], item.get('catalogReleaseUrl'))} "
-            f"| {link(item.get('repo') or '—', item.get('repoUrl'))} @ {commit} "
-            f"| {link('.lgx', lgx)} |"
-        )
+        rows.append(f"| {link(item['name'], item.get('repoUrl'))} "
+                    f"| {link(item['version'], item.get('catalogReleaseUrl'))} "
+                    f"| {commit_link(item)} | {link('.lgx', lgx)} | " + " | ".join(cells) + " |")
     return "\n".join(rows) + "\n"
 
 
 def results_table(tests):
     if not tests:
         return "_No doc-tests were run._\n"
-    platforms = sorted({t["platform"] for t in tests}, key=lambda p: list(PLATFORM_LABELS).index(p)
-                       if p in PLATFORM_LABELS else 99)
+    platforms = sorted({t["platform"] for t in tests}, key=platform_order)
     specs = sorted({t["spec"] for t in tests})
 
     rows = ["| Doc-test | " + " | ".join(PLATFORM_LABELS.get(p, p) for p in platforms) + " |",
@@ -156,11 +174,13 @@ def results_table(tests):
 
 
 def windows_note(tests):
-    if not any(t["platform"] == "windows-x86_64" for t in tests):
+    if not any(t["platform"] == "windows-x86_64" and t["status"] != "skipped" for t in tests):
         return ""
-    return ("Windows is validated only by the tutorial's Windows legs: Nix does not "
-            "run there, so each is cross-built on Linux and run on `windows-latest`. "
-            "The release set's own doc-tests do not run on Windows (`—`).\n")
+    return ("Nix does not run on Windows, so each Windows leg is built on Linux and "
+            "run on `windows-latest`, executing the steps its spec marks for Windows. "
+            "The release set's own legs run the released `logosctl` zip and the "
+            "catalog's modules, with each spec's probe cross-built by the pinned "
+            "builder.\n")
 
 
 def skips_section(tests):
@@ -202,6 +222,7 @@ def render(lock):
     tests = lock.get("tests", [])
     failed = [t for t in tests if t["status"] == "failed"]
 
+    # Versions first: they are what a reader comes for. The evidence follows.
     parts = [
         f"# Logos Release Set {lock['version']}",
         "",
@@ -212,14 +233,10 @@ def render(lock):
         "readable provenance: repository URL, commit, tag, download URL, "
         "checksum and producing CI run for every entry.",
         "",
-        "## Validation",
-        "",
-        results_table(tests),
-        "",
-        windows_note(tests),
-        skips_section(tests),
-        "",
         "## Artifacts",
+        "",
+        f"{AVAILABLE} published for that platform, {MISSING} not. An app's "
+        f"{AVAILABLE} links to that platform's download.",
         "",
         binary_table(lock.get("apps"), "Apps"),
         "",
@@ -231,15 +248,20 @@ def render(lock):
         "",
         package_table(lock.get("uiApps"), "UI apps"),
         "",
-        tutorial_section(lock.get("tutorial")),
-        "",
-        "---",
-        "",
         f"Modules and UI apps are installed from "
         f"[{lock['catalog']['repo']}]({lock['catalog']['repoUrl']}) with "
         f"`logosctl` (`lgpm` installs them into Basecamp's user directory). "
-        f"The source commit shown for each "
-        f"is the submodule gitlink the catalog release was built from.",
+        f"For each, the commit is the submodule gitlink the catalog release was "
+        f"built from, and {AVAILABLE} marks a platform its `.lgx` carries a variant for.",
+        "",
+        "## Validation",
+        "",
+        results_table(tests),
+        "",
+        windows_note(tests),
+        skips_section(tests),
+        "",
+        tutorial_section(lock.get("tutorial")),
     ]
     if failed:
         parts += ["", f"> **{len(failed)} doc-test(s) failed.** See the linked reports."]
