@@ -478,13 +478,17 @@ sections:
       the pinned one.
     steps:
       - title: "Wait until it is running"
-        text: "Startup can take a few minutes."
+        text: |
+          The node reports running only once its bootstrap dials resolve. On a
+          network that cannot reach the bootstrap nodes that took 9 minutes on
+          Windows, so this waits up to 12.
         run: |
+          deadline=$(( $(date +%s) + 720 ))
           out=""
-          for i in $(seq 1 90); do
+          while [ "$(date +%s)" -lt "$deadline" ]; do
             out="$(./bin/logosctl --config-dir ./session call storage_module isRunning 2>&1)"
             case "$out" in *'"result":true'*) break ;; esac
-            sleep 2
+            sleep 5
           done
           printf '%s\n' "$out"
         code_block: "logosctl call storage_module isRunning"
