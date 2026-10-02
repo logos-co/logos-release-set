@@ -61,8 +61,13 @@ sections:
       - title: "Start a logosctl daemon to download with"
         text: |
           Downloads are served by the `package_downloader` module inside the
-          daemon, so it starts first, in a session of its own.
-        run: "./bin/logosctl --config-dir ./session daemon start --detach"
+          daemon, so it starts first, in a session of its own. Its `HOME` is
+          inside this run's directory, because the package downloader also
+          starts a storage node, whose default data directory is
+          `~/.logos_storage`.
+        run: |
+          mkdir -p home
+          HOME="$(pwd)/home" ./bin/logosctl --config-dir ./session daemon start --detach
         code_block: "logosctl --config-dir ./session daemon start --detach"
 
   - title: "Populate a user directory from the catalog"

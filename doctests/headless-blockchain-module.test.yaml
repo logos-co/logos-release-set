@@ -10,7 +10,7 @@ intro: |
   module catalog at the pinned version and checksum-verified before install.
 
   Initialization follows the
-  [Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide) —
+  [Run a Logos node](https://docs.logos.co/run-a-node) guide for Testnet v0.3 —
   the real testnet peer set, `generate_user_config`, then `start` — stopping
   short of the parts a CI runner cannot do (faucet funding and blend-network
   participation both need a public IP and on-chain funds).
@@ -92,7 +92,13 @@ sections:
           `--detach` is not `&`. Backgrounding returns before the transports
           have bound; `--detach` returns only once the daemon has published its
           state file and is answering commands.
-        run: "./bin/logosctl --config-dir ./session daemon start --detach"
+          The daemon gets a `HOME` inside this run's directory. As soon as it
+          is up, the package downloader starts the storage node with its default
+          configuration, which keeps the node's data in `~/.logos_storage`; this
+          keeps a run clear of a real node there, such as Basecamp's.
+        run: |
+          mkdir -p home
+          HOME="$(pwd)/home" ./bin/logosctl --config-dir ./session daemon start --detach
         code_block: "logosctl --config-dir ./session daemon start --detach"
       - title: "Confirm it is up"
         run: "./bin/logosctl --config-dir ./session daemon status"
@@ -393,13 +399,13 @@ sections:
   - title: "Initialize the node"
     step: true
     text: |
-      The node operator guide's blockchain step. `generate_user_config` takes the
+      The Run a Logos node guide's blockchain step. `generate_user_config` takes the
       testnet's initial peers and writes `user_config.yaml` into the **daemon's**
       working directory; `start` then takes that path plus an empty second
       argument (no deployment file is needed any more).
     steps:
       - title: "Write the testnet peer set"
-        text: "The initial peers from the node operator guide, verbatim."
+        text: "The initial peers from the Run a Logos node guide, verbatim."
         file:
           path: peers.json
           language: json
