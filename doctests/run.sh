@@ -4,7 +4,7 @@
 #
 # Each spec validates the release set pinned by ../release-set.json using only
 # released artifacts: tools downloaded from GitHub releases, modules installed
-# from the catalog with lgpd/lgpm.
+# from the catalog with logosctl (and lgpm for Basecamp's user directory).
 #
 #   headless-storage-module    the most deterministic — start here
 #   headless-delivery-module
