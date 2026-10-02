@@ -86,8 +86,19 @@ def short(commit):
     return (commit or "")[:10] or "—"
 
 
-def link(text, url):
-    return f"[{text}]({url})" if url else text
+def link(text, url, title=None):
+    if not url:
+        return text
+    return f'[{text}]({url} "{title}")' if title else f"[{text}]({url})"
+
+
+# The artifact tables' platform columns. Distinct from the validation table's
+# ✅/❌, which say whether a doc-test passed.
+AVAILABLE, MISSING = "✔️", "✖️"
+
+
+def table_head(columns):
+    return ["| " + " | ".join(columns) + " |", "|" + "---|" * len(columns)]
 
 
 def commit_link(item):
@@ -97,27 +108,30 @@ def commit_link(item):
 
 
 def binary_table(items, title):
+    """Apps, dev utils and tools: downloads per platform, or a Nix flake."""
     if not items:
         return ""
-    rows = [f"### {title}", "",
-            "| Component | Version | Commit | Downloads |",
-            "|---|---|---|---|"]
-    for item in items:
-        if item.get("consumedAs") == "flake":
-            downloads = f"`{item.get('flakeRef', '')}`"
-        else:
-            # Label each download by the platform it is for — asset filenames
-            # alone are ambiguous (two of them end in "-linux.tar.gz").
-            downloads = " · ".join(
-                link(PLATFORM_LABELS.get(asset.get("platform"), asset["name"]), asset["url"])
-                for asset in sorted(item.get("assets", []),
-                                    key=lambda a: platform_order(a.get("platform")))
-            ) or "—"
-        rows.append(
-            f"| {link(item['name'], item.get('repoUrl'))} "
-            f"| {link(item.get('tag') or '—', item.get('releaseUrl'))} "
-            f"| {commit_link(item)} | {downloads} |"
-        )
+    binaries = [i for i in items if i.get("consumedAs") != "flake"]
+    flakes = [i for i in items if i.get("consumedAs") == "flake"]
+    rows = [f"### {title}", ""]
+    if binaries:
+        rows += table_head(["Component", "Version", "Commit"] + list(PLATFORM_LABELS.values()))
+        for item in binaries:
+            # Each mark links to that platform's download; hovering names the file.
+            cells = [" ".join(link(AVAILABLE, a["url"], a["name"]) for a in item.get("assets", [])
+                              if a.get("platform") == platform) or MISSING
+                     for platform in PLATFORM_LABELS]
+            rows.append(f"| {link(item['name'], item.get('repoUrl'))} "
+                        f"| {link(item.get('tag') or '—', item.get('releaseUrl'))} "
+                        f"| {commit_link(item)} | " + " | ".join(cells) + " |")
+    if flakes:
+        if binaries:
+            rows.append("")
+        rows += table_head(["Component", "Version", "Commit", "Nix flake"])
+        for item in flakes:
+            rows.append(f"| {link(item['name'], item.get('repoUrl'))} "
+                        f"| {link(item.get('tag') or '—', item.get('releaseUrl'))} "
+                        f"| {commit_link(item)} | `{item.get('flakeRef', '')}` |")
     return "\n".join(rows) + "\n"
 
 
@@ -125,18 +139,15 @@ def package_table(items, title):
     """Modules and UI apps: one .lgx each, carrying a variant per platform."""
     if not items:
         return ""
-    rows = [f"### {title}", "",
-            "| Component | Version | Commit | Platforms | Package |",
-            "|---|---|---|---|---|"]
+    rows = [f"### {title}", ""]
+    rows += table_head(["Component", "Version", "Commit", "Package"] + list(PLATFORM_LABELS.values()))
     for item in items:
-        platforms = " · ".join(PLATFORM_LABELS.get(p, p) for p in
-                               sorted(item.get("platforms") or [], key=platform_order)) or "—"
+        have = set(item.get("platforms") or [])
+        cells = [AVAILABLE if platform in have else MISSING for platform in PLATFORM_LABELS]
         lgx = (item.get("lgx") or {}).get("url")
-        rows.append(
-            f"| {link(item['name'], item.get('repoUrl'))} "
-            f"| {link(item['version'], item.get('catalogReleaseUrl'))} "
-            f"| {commit_link(item)} | {platforms} | {link('.lgx', lgx)} |"
-        )
+        rows.append(f"| {link(item['name'], item.get('repoUrl'))} "
+                    f"| {link(item['version'], item.get('catalogReleaseUrl'))} "
+                    f"| {commit_link(item)} | {link('.lgx', lgx)} | " + " | ".join(cells) + " |")
     return "\n".join(rows) + "\n"
 
 
@@ -224,6 +235,9 @@ def render(lock):
         "",
         "## Artifacts",
         "",
+        f"{AVAILABLE} published for that platform, {MISSING} not. An app's "
+        f"{AVAILABLE} links to that platform's download.",
+        "",
         binary_table(lock.get("apps"), "Apps"),
         "",
         binary_table(lock.get("devUtils"), "Dev utils"),
@@ -238,7 +252,7 @@ def render(lock):
         f"[{lock['catalog']['repo']}]({lock['catalog']['repoUrl']}) with "
         f"`logosctl` (`lgpm` installs them into Basecamp's user directory). "
         f"For each, the commit is the submodule gitlink the catalog release was "
-        f"built from, and the platforms are the variants its `.lgx` carries.",
+        f"built from, and {AVAILABLE} marks a platform its `.lgx` carries a variant for.",
         "",
         "## Validation",
         "",
