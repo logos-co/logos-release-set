@@ -284,8 +284,9 @@ export RELEASE_SET_DIR="$PWD" GITHUB_TOKEN=...
    spec that started can only pass or fail.
 3. **publish** — only on green, and never from `main`: a release tagged
    `v<version>` carrying `release-set.lock.json` and the per-platform HTML
-   reports, with a description that links every binary, every `.lgx`, every
-   source commit, and a table of what was skipped and why.
+   reports. Its description lists every artifact first — version, commit and
+   platforms, linking each binary and `.lgx` — then the validation table and
+   what was skipped and why.
 
 Skipped platforms are always named in the release description. A release that
 does not mention a platform passed there. And "everything succeeded" means at

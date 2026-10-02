@@ -75,6 +75,10 @@ PLATFORM_LABELS = {
     "windows-x86_64": "windows x86_64",
 }
 
+
+def platform_order(platform):
+    return list(PLATFORM_LABELS).index(platform) if platform in PLATFORM_LABELS else 99
+
 STATUS_MARK = {"passed": "✅", "failed": "❌", "skipped": "⏭️"}
 
 
@@ -86,11 +90,17 @@ def link(text, url):
     return f"[{text}]({url})" if url else text
 
 
+def commit_link(item):
+    return link(f"`{short(item.get('commit'))}`",
+                f"{item['repoUrl']}/commit/{item['commit']}"
+                if item.get("commit") and item.get("repoUrl") else None)
+
+
 def binary_table(items, title):
     if not items:
         return ""
     rows = [f"### {title}", "",
-            "| Component | Tag | Commit | Downloads |",
+            "| Component | Version | Commit | Downloads |",
             "|---|---|---|---|"]
     for item in items:
         if item.get("consumedAs") == "flake":
@@ -101,34 +111,31 @@ def binary_table(items, title):
             downloads = " · ".join(
                 link(PLATFORM_LABELS.get(asset.get("platform"), asset["name"]), asset["url"])
                 for asset in sorted(item.get("assets", []),
-                                    key=lambda a: list(PLATFORM_LABELS).index(a["platform"])
-                                    if a.get("platform") in PLATFORM_LABELS else 99)
+                                    key=lambda a: platform_order(a.get("platform")))
             ) or "—"
-        commit = link(f"`{short(item.get('commit'))}`",
-                      f"{item['repoUrl']}/commit/{item['commit']}" if item.get("commit") else None)
         rows.append(
             f"| {link(item['name'], item.get('repoUrl'))} "
             f"| {link(item.get('tag') or '—', item.get('releaseUrl'))} "
-            f"| {commit} | {downloads} |"
+            f"| {commit_link(item)} | {downloads} |"
         )
     return "\n".join(rows) + "\n"
 
 
 def package_table(items, title):
+    """Modules and UI apps: one .lgx each, carrying a variant per platform."""
     if not items:
         return ""
     rows = [f"### {title}", "",
-            "| Package | Version | Source commit | Package |",
-            "|---|---|---|---|"]
+            "| Component | Version | Commit | Platforms | Package |",
+            "|---|---|---|---|---|"]
     for item in items:
-        commit = link(f"`{short(item.get('commit'))}`",
-                      f"{item['repoUrl']}/commit/{item['commit']}" if item.get("commit") else None)
+        platforms = " · ".join(PLATFORM_LABELS.get(p, p) for p in
+                               sorted(item.get("platforms") or [], key=platform_order)) or "—"
         lgx = (item.get("lgx") or {}).get("url")
         rows.append(
-            f"| {item['name']} "
+            f"| {link(item['name'], item.get('repoUrl'))} "
             f"| {link(item['version'], item.get('catalogReleaseUrl'))} "
-            f"| {link(item.get('repo') or '—', item.get('repoUrl'))} @ {commit} "
-            f"| {link('.lgx', lgx)} |"
+            f"| {commit_link(item)} | {platforms} | {link('.lgx', lgx)} |"
         )
     return "\n".join(rows) + "\n"
 
@@ -136,8 +143,7 @@ def package_table(items, title):
 def results_table(tests):
     if not tests:
         return "_No doc-tests were run._\n"
-    platforms = sorted({t["platform"] for t in tests}, key=lambda p: list(PLATFORM_LABELS).index(p)
-                       if p in PLATFORM_LABELS else 99)
+    platforms = sorted({t["platform"] for t in tests}, key=platform_order)
     specs = sorted({t["spec"] for t in tests})
 
     rows = ["| Doc-test | " + " | ".join(PLATFORM_LABELS.get(p, p) for p in platforms) + " |",
@@ -205,6 +211,7 @@ def render(lock):
     tests = lock.get("tests", [])
     failed = [t for t in tests if t["status"] == "failed"]
 
+    # Versions first: they are what a reader comes for. The evidence follows.
     parts = [
         f"# Logos Release Set {lock['version']}",
         "",
@@ -214,13 +221,6 @@ def render(lock):
         "together. `release-set.lock.json` (attached) carries the full machine-"
         "readable provenance: repository URL, commit, tag, download URL, "
         "checksum and producing CI run for every entry.",
-        "",
-        "## Validation",
-        "",
-        results_table(tests),
-        "",
-        windows_note(tests),
-        skips_section(tests),
         "",
         "## Artifacts",
         "",
@@ -234,15 +234,20 @@ def render(lock):
         "",
         package_table(lock.get("uiApps"), "UI apps"),
         "",
-        tutorial_section(lock.get("tutorial")),
-        "",
-        "---",
-        "",
         f"Modules and UI apps are installed from "
         f"[{lock['catalog']['repo']}]({lock['catalog']['repoUrl']}) with "
         f"`logosctl` (`lgpm` installs them into Basecamp's user directory). "
-        f"The source commit shown for each "
-        f"is the submodule gitlink the catalog release was built from.",
+        f"For each, the commit is the submodule gitlink the catalog release was "
+        f"built from, and the platforms are the variants its `.lgx` carries.",
+        "",
+        "## Validation",
+        "",
+        results_table(tests),
+        "",
+        windows_note(tests),
+        skips_section(tests),
+        "",
+        tutorial_section(lock.get("tutorial")),
     ]
     if failed:
         parts += ["", f"> **{len(failed)} doc-test(s) failed.** See the linked reports."]
