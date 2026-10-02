@@ -514,7 +514,7 @@ sections:
         run: "./bin/logosctl --config-dir ./session call probe_storage targetVersion"
         code_block: "logosctl call probe_storage targetVersion"
         expect_contains:
-          - '"result":"probe-call-ok'
+          - "probe-call-ok version="
       - title: "Subscribe to the event"
         run: "./bin/logosctl --config-dir ./session call probe_storage subscribe"
         code_block: "logosctl call probe_storage subscribe"

@@ -431,34 +431,21 @@ sections:
       public IP, and outbound-only is enough to bring the node up.
     steps:
       - title: "Write the node config"
-        run: |
-          cat > delivery-config.json <<'EOF'
-          {
-            "entryLayer": "kernel",
-            "kernelConf": {
-              "preset": "logos.test",
-              "relay": true,
-              "logLevel": "INFO",
-              "tcpPort": 30303,
-              "discv5UdpPort": 9000,
-              "discv5Discovery": true
+        file:
+          path: delivery-config.json
+          language: json
+          content: |
+            {
+              "entryLayer": "kernel",
+              "kernelConf": {
+                "preset": "logos.test",
+                "relay": true,
+                "logLevel": "INFO",
+                "tcpPort": 30303,
+                "discv5UdpPort": 9000,
+                "discv5Discovery": true
+              }
             }
-          }
-          EOF
-          cat delivery-config.json
-        code_block: |
-          {
-            "entryLayer": "kernel",
-            "kernelConf": {
-              "preset": "logos.test",
-              "relay": true,
-              "logLevel": "INFO",
-              "tcpPort": 30303,
-              "discv5UdpPort": 9000,
-              "discv5Discovery": true
-            }
-          }
-        check_file: "delivery-config.json"
       - title: "createNode"
         run: "./bin/logosctl --config-dir ./session call delivery_module createNode @delivery-config.json"
         code_block: "logosctl call delivery_module createNode @delivery-config.json"
@@ -495,7 +482,7 @@ sections:
         run: "./bin/logosctl --config-dir ./session call probe_delivery nodeInfo Version"
         code_block: "logosctl call probe_delivery nodeInfo Version"
         expect_contains:
-          - '"result":"probe-call-ok'
+          - "probe-call-ok"
       - title: "The event the probe caught"
         text: |
           `start` returns as soon as the node accepts the call; `nodeStarted` is
@@ -516,7 +503,7 @@ sections:
           # Not just "an event arrived" — the event the node emitted on a
           # successful start. An empty latch or a failed start both still fail
           # here, after the full 60s the loop allows.
-          - '"result":"success=true'
+          - "success=true message="
         post_text: |
           That event was emitted by the pinned `delivery_module` as its node
           finished starting, delivered over the runtime's event channel, and
