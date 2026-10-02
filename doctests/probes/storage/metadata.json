@@ -1,0 +1,24 @@
+{
+  "name": "probe_storage",
+  "display_name": "Storage Probe",
+  "version": "1.0.0",
+  "type": "core",
+  "interface": "universal",
+  "category": "test",
+  "description": "Calls storage_module and latches one of its events.",
+  "main": "probe_storage_plugin",
+  "dependencies": ["storage_module"],
+  "dependency_overrides": {
+    "storage_module": { "file": "deps/storage_module.lidl" }
+  },
+  "nix": {
+    "packages": { "build": [], "runtime": [] },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

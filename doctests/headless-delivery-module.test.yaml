@@ -23,6 +23,12 @@ intro: |
   over HTTP. `delivery_module` is the rendered-text kind of metrics source, so
   this also exercises the scraper's parse-and-merge path.
 
+  The spec runs on Windows too. Nix does not run there, so CI prepares that leg
+  on Linux: it unpacks the pinned release's `logosctl-x86_64-windows.zip` and
+  cross-builds the probe with the pinned builder, then runs the steps marked
+  for Windows on `windows-latest`. `openmetrics` publishes no Windows build, so
+  the metrics section runs on Linux and macOS only.
+
 what_you_build: "The pinned `delivery_module`, installed from the catalog, started headlessly, and observed through a purpose-built probe module."
 
 what_you_learn:
@@ -32,11 +38,13 @@ what_you_learn:
   - How to subscribe to a dependency's typed events from another module
   - Why a probe subscribes before the lifecycle call that fires the event
   - 'Which module serves `/metrics`, and how `"format": "text"` picks the collection convention'
+  - How the Windows half runs on artifacts CI prepares on Linux
 
 prerequisites:
   - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
   - "**Nix** with flakes enabled — used only to build the probe module; the tool and modules under test come from released binaries."
   - "**`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API)."
+  - "**For the Windows half**, Git Bash with `curl` and `jq`, in a directory holding this repository's `flake.nix` targets as `logos-windows-ci` stages them: `release-set/`, `logosctl/` and `probe-delivery/`."
 
 sections:
   - title: "Resolve the release set"
@@ -47,9 +55,20 @@ sections:
       for every artifact. Every later step reads the lock.
     steps:
       - title: "Resolve"
+        platform: [linux, macos]
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" lock'
         code_block: "./doctests/release-set.sh lock"
         check_file: "release-set.lock.json"
+      - title: "Read the pins"
+        platform: windows
+        text: |
+          Windows resolves nothing. CI read the lock on Linux to pin this leg's
+          inputs, the builder tag and the `logosctl` release, and staged
+          `release-set.json` with a helper that reads it.
+        run: "bash release-set/windows.sh pins"
+        code_block: "bash release-set/windows.sh pins"
+        expect_contains:
+          - "delivery_module"
 
   - title: "Fetch the pinned runtime"
     step: true
@@ -65,8 +84,19 @@ sections:
       match the platform.
     steps:
       - title: "Fetch logosctl"
+        platform: [linux, macos]
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logosctl'
         code_block: "./doctests/release-set.sh fetch logos-logoscore-cli logosctl"
+        check_file: "bin/logosctl"
+      - title: "Use the staged release"
+        platform: windows
+        text: |
+          On Windows the pinned release's `logosctl-x86_64-windows.zip` is
+          already here, unpacked as `logosctl/`. The helper writes the same
+          `./bin/logosctl` wrapper as `fetch` does elsewhere; `logosctl.exe`
+          stays in its bundle, next to `logos_host.exe` and the modules it ships.
+        run: "bash release-set/windows.sh link logosctl"
+        code_block: "bash release-set/windows.sh link logosctl"
         check_file: "bin/logosctl"
 
   - title: "Start a session"
@@ -91,9 +121,20 @@ sections:
           is up, the package downloader starts the storage node with its default
           configuration, which keeps the node's data in `~/.logos_storage`; this
           keeps a run clear of a real node there, such as Basecamp's.
+        platform: [linux, macos]
         run: |
           mkdir -p home
           HOME="$(pwd)/home" ./bin/logosctl --config-dir ./session daemon start --detach
+        code_block: "logosctl --config-dir ./session daemon start --detach"
+      - title: "Start the daemon"
+        platform: windows
+        text: |
+          The same command. `logosctl` is a native Windows program, so `HOME`
+          is given in Windows form; the storage module reads it before
+          `USERPROFILE`.
+        run: |
+          mkdir -p home
+          HOME="$(cygpath -m "$PWD")/home" ./bin/logosctl --config-dir ./session daemon start --detach
         code_block: "logosctl --config-dir ./session daemon start --detach"
       - title: "Confirm it is up"
         run: "./bin/logosctl --config-dir ./session daemon status"
@@ -119,6 +160,7 @@ sections:
       `.lgx` against the catalog's published `sha256` before anything unpacks it.
     steps:
       - title: "Download, verify and install"
+        platform: [linux, macos]
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" ctl-install delivery_module'
         code_block: |
           logosctl package download delivery_module --version <pinned> -o packages
@@ -126,9 +168,23 @@ sections:
         expect_contains:
           - "sha256 OK"
           - '"installed":['
+      - title: "Download, verify and install"
+        platform: windows
+        text: |
+          The same two commands. With no lock on Windows, the helper takes the
+          expected `sha256` from the catalog index the resolver reads.
+        run: "bash release-set/windows.sh ctl-install delivery_module"
+        code_block: |
+          logosctl package download delivery_module --version <pinned> -o packages
+          logosctl package install --file packages/delivery_module-*.lgx -y
+        expect_contains:
+          - "sha256 OK"
+          - '"installed":['
       - title: "Install the metrics scraper too"
+        platform: [linux, macos]
         text: |
           `openmetrics` serves the `/metrics` endpoint later in this doc-test.
+          It publishes no Windows build.
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" ctl-install openmetrics'
         code_block: |
           logosctl package download openmetrics --version <pinned> -o packages
@@ -139,6 +195,7 @@ sections:
 
   - title: "Build a probe module with the pinned module-builder"
     step: true
+    platform: [linux, macos]
     text: |
       The probe is built **before** the node starts, because it needs to be
       subscribed when `nodeStarted` fires. It declares `delivery_module` as a
@@ -147,30 +204,16 @@ sections:
       source — what it talks to at runtime is the downloaded `.lgx`.
     steps:
       - title: "Write the dependency contract"
-        run: |
-          mkdir -p probe/src probe/deps
-          VER="$("$RELEASE_SET_DIR/doctests/release-set.sh" pin modules delivery_module)"
-          cat > probe/deps/delivery_module.lidl <<EOF
-          ; The subset of delivery_module this probe uses, supplied as a
-          ; dependency_override so the probe never builds delivery_module itself.
-          module delivery_module {
-            version "$VER"
+        file:
+          path: probe/deps/delivery_module.lidl
+          content: |
+            ; The subset of delivery_module this probe uses, supplied as a
+            ; dependency_override so the probe never builds delivery_module itself.
+            module delivery_module {
+              method getNodeInfo(nodeInfoId: tstr) -> result
 
-            method getNodeInfo(nodeInfoId: tstr) -> result
-
-            event nodeStarted(success: bool, message: tstr, timestamp: int)
-          }
-          EOF
-          cat probe/deps/delivery_module.lidl
-        code_block: |
-          module delivery_module {
-            version "<pinned>"
-
-            method getNodeInfo(nodeInfoId: tstr) -> result
-
-            event nodeStarted(success: bool, message: tstr, timestamp: int)
-          }
-        check_file: "probe/deps/delivery_module.lidl"
+              event nodeStarted(success: bool, message: tstr, timestamp: int)
+            }
 
       - title: "Declare the module"
         file:
@@ -322,23 +365,30 @@ sections:
           and the delivery module came from the catalog as a portable variant; a
           dev build would RPATH into `/nix/store` and refuse to load beside them.
           Nix only sees files git knows about, so the probe is committed first.
+          The link is named after the target CI cross-builds for Windows, so
+          the next step reads the same path on every platform.
         run: |
           cd probe
           git init -q . && git add -A
-          nix build '.#lgx-portable' --no-write-lock-file -o probe-lgx
-          ls probe-lgx/*.lgx
+          nix build '.#lgx-portable' --no-write-lock-file -o ../probe-delivery
+          ls ../probe-delivery/*.lgx
         code_block: |
           git init && git add -A
-          nix build '.#lgx-portable' -o probe-lgx
-        check_file: "probe/probe-lgx"
+          nix build '.#lgx-portable' -o ../probe-delivery
+        check_file: "probe-delivery"
 
       - title: "Install the probe"
+        platform: [linux, macos, windows]
         text: |
           A path ending in `.lgx` is read as a file, so this never touches the
           catalog. The probe is unsigned and installs anyway: the session's
           `signature_policy` defaults to `warn`.
-        run: "./bin/logosctl --config-dir ./session package install --file probe/probe-lgx/*.lgx -y"
-        code_block: "logosctl package install --file probe/probe-lgx/*.lgx -y"
+
+          On Windows, `probe-delivery/` holds the probe CI cross-built with the
+          same pinned builder from `doctests/probes/delivery`: the files above,
+          which `scripts/check-probes.py` keeps identical to this spec.
+        run: "./bin/logosctl --config-dir ./session package install --file probe-delivery/*.lgx -y"
+        code_block: "logosctl package install --file probe-delivery/*.lgx -y"
         expect_contains:
           - '"installed":['
 
@@ -381,34 +431,21 @@ sections:
       public IP, and outbound-only is enough to bring the node up.
     steps:
       - title: "Write the node config"
-        run: |
-          cat > delivery-config.json <<'EOF'
-          {
-            "entryLayer": "kernel",
-            "kernelConf": {
-              "preset": "logos.test",
-              "relay": true,
-              "logLevel": "INFO",
-              "tcpPort": 30303,
-              "discv5UdpPort": 9000,
-              "discv5Discovery": true
+        file:
+          path: delivery-config.json
+          language: json
+          content: |
+            {
+              "entryLayer": "kernel",
+              "kernelConf": {
+                "preset": "logos.test",
+                "relay": true,
+                "logLevel": "INFO",
+                "tcpPort": 30303,
+                "discv5UdpPort": 9000,
+                "discv5Discovery": true
+              }
             }
-          }
-          EOF
-          cat delivery-config.json
-        code_block: |
-          {
-            "entryLayer": "kernel",
-            "kernelConf": {
-              "preset": "logos.test",
-              "relay": true,
-              "logLevel": "INFO",
-              "tcpPort": 30303,
-              "discv5UdpPort": 9000,
-              "discv5Discovery": true
-            }
-          }
-        check_file: "delivery-config.json"
       - title: "createNode"
         run: "./bin/logosctl --config-dir ./session call delivery_module createNode @delivery-config.json"
         code_block: "logosctl call delivery_module createNode @delivery-config.json"
@@ -445,7 +482,7 @@ sections:
         run: "./bin/logosctl --config-dir ./session call probe_delivery nodeInfo Version"
         code_block: "logosctl call probe_delivery nodeInfo Version"
         expect_contains:
-          - '"result":"probe-call-ok'
+          - "probe-call-ok"
       - title: "The event the probe caught"
         text: |
           `start` returns as soon as the node accepts the call; `nodeStarted` is
@@ -466,7 +503,7 @@ sections:
           # Not just "an event arrived" — the event the node emitted on a
           # successful start. An empty latch or a failed start both still fail
           # here, after the full 60s the loop allows.
-          - '"result":"success=true'
+          - "success=true message="
         post_text: |
           That event was emitted by the pinned `delivery_module` as its node
           finished starting, delivered over the runtime's event channel, and
@@ -474,6 +511,7 @@ sections:
 
   - title: "Expose the metrics endpoint"
     step: true
+    platform: [linux, macos]
     text: |
       `/metrics` is served by the **`openmetrics`** module itself: it runs an HTTP
       server (libmicrohttpd) and, on every scrape, calls the metrics convention

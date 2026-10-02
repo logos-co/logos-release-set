@@ -46,16 +46,13 @@ PLACEHOLDER = "CHANGE-ME"
 
 API = "https://api.github.com"
 
-# The three platforms a release set is VALIDATED on. Windows is deliberately
-# absent: there is no Windows CI job yet, so listing it here would report every
-# component as a coverage gap and assert a guarantee nothing currently checks.
-PLATFORMS = ["linux-x86_64", "linux-arm64", "macos-arm64"]
+# The platforms a release set is VALIDATED on, and reports coverage gaps for.
+# Windows runs only the specs with a Windows half (scripts/windows-plan.py) and
+# the tutorial's Windows legs; every other spec is a skip there.
+PLATFORMS = ["linux-x86_64", "linux-arm64", "macos-arm64", "windows-x86_64"]
 
-# Platforms whose artifacts we can RECOGNISE. Wider than PLATFORMS on purpose --
-# a Windows asset must be labelled correctly the moment one is published, long
-# before Windows becomes a release gate. Promote to PLATFORMS when Windows CI
-# exists.
-KNOWN_PLATFORMS = PLATFORMS + ["windows-x86_64"]
+# Platforms whose artifacts we can RECOGNISE.
+KNOWN_PLATFORMS = PLATFORMS
 
 # Catalog .lgx variant name per platform (manifest `main` keys).
 LGX_VARIANT = {
