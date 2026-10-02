@@ -19,10 +19,10 @@ import json
 import sys
 
 # The headless specs drive logosctl, which bundles package management, so
-# logos-logoscore-cli is the only binary they need. Basecamp has no such
-# built-in, and still populates its user dir with lgpd + lgpm.
+# logos-logoscore-cli is the only binary they need. The Basecamp specs download
+# with logosctl too, and install into Basecamp's user dir with lgpm.
 CTL = ["logos-logoscore-cli"]
-PM_TOOLS = ["logos-package-downloader", "logos-package-manager"]
+PM_TOOLS = CTL + ["logos-package-manager"]
 
 BUILDER = ["logos-module-builder"]
 

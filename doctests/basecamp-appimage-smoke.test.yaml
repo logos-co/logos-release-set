@@ -6,7 +6,7 @@ intro: |
   This doc-test runs **the artifact a user actually downloads** — the Basecamp
   AppImage (Linux) or `.dmg` (macOS) attached to the release the release set
   pins — against a user directory populated with every module and UI app in the
-  set, installed from the catalog with `lgpd` and `lgpm`.
+  set, downloaded from the catalog with `logosctl` and installed with `lgpm`.
 
   It is deliberately a *smoke* test. Shipping builds have the QML inspector
   compiled out (it is a test-only feature, off in every release artifact), so
@@ -43,20 +43,27 @@ sections:
         code_block: "./doctests/release-set.sh lock"
         check_file: "release-set.lock.json"
 
-  - title: "Fetch the package manager CLIs"
+  - title: "Fetch the package tools"
     step: true
     text: |
-      `lgpd` and `lgpm` at the tags the release set pins — the same tools a user
-      would install packages with.
+      `logosctl` and `lgpm` at the tags the release set pins: `logosctl`
+      downloads each package from the catalog, and `lgpm` installs it into
+      Basecamp's user directory, which `logosctl` does not write to.
     steps:
-      - title: "Fetch lgpd and lgpm"
+      - title: "Fetch logosctl and lgpm"
         run: |
-          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-downloader lgpd
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logosctl
           "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
         code_block: |
-          ./doctests/release-set.sh fetch logos-package-downloader lgpd
+          ./doctests/release-set.sh fetch logos-logoscore-cli logosctl
           ./doctests/release-set.sh fetch logos-package-manager lgpm
         check_file: "bin/lgpm"
+      - title: "Start a logosctl daemon to download with"
+        text: |
+          Downloads are served by the `package_downloader` module inside the
+          daemon, so it starts first, in a session of its own.
+        run: "./bin/logosctl --config-dir ./session daemon start --detach"
+        code_block: "logosctl --config-dir ./session daemon start --detach"
 
   - title: "Populate a user directory from the catalog"
     step: true
@@ -75,6 +82,7 @@ sections:
           MODULES_DIR=./testdata/modules PLUGINS_DIR=./testdata/plugins \
             "$RELEASE_SET_DIR/doctests/release-set.sh" install-all
         code_block: |
+          logosctl --config-dir ./session package download <each> --version <pinned> -o packages
           lgpm --modules-dir ./testdata/modules --ui-plugins-dir ./testdata/plugins \
                install --file packages/<each>.lgx
         expect_contains:
@@ -89,6 +97,12 @@ sections:
         expect_contains:
           - "storage_module"
           - "storage_ui"
+      - title: "Stop the download daemon"
+        run: |
+          trap '' TERM
+          ./bin/logosctl --config-dir ./session daemon stop || true
+          true
+        code_block: "logosctl --config-dir ./session daemon stop"
 
   - title: "Fetch the shipped Basecamp artifact"
     step: true

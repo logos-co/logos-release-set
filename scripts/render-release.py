@@ -237,7 +237,8 @@ def render(lock):
         "",
         f"Modules and UI apps are installed from "
         f"[{lock['catalog']['repo']}]({lock['catalog']['repoUrl']}) with "
-        f"`logosctl` (or `lgpd` and `lgpm`). The source commit shown for each "
+        f"`logosctl` (`lgpm` installs them into Basecamp's user directory). "
+        f"The source commit shown for each "
         f"is the submodule gitlink the catalog release was built from.",
     ]
     if failed:

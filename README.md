@@ -5,7 +5,7 @@ one file naming the exact release of every Logos component that is published and
 supported as a unit, plus the machinery to prove that set actually works.
 
 ```
-release-set.json          what a human pins   (7 tags + 13 versions + the tutorial)
+release-set.json          what a human pins   (6 tags + 15 versions + the tutorial)
         │
         │  scripts/resolve.py
         ▼
@@ -22,7 +22,7 @@ Five groups, two pinning styles:
 
 | Group | Pinned by | What it is |
 |---|---|---|
-| `apps` | GitHub release **tag** | Basecamp, logosctl, lgpm, lgpd |
+| `apps` | GitHub release **tag** | Basecamp, logosctl, lgpm |
 | `devUtils` | GitHub release **tag** | logos-module-builder |
 | `tools` | GitHub release **tag** | logos-module (`lm`), logos-package (`lgx`) |
 | `modules` | catalog **version** | `core` modules — install to `--modules-dir` |
@@ -83,7 +83,10 @@ in `logos-modules-release` at the package's release tag:
 The module-name → submodule-directory mapping is read from each submodule's own
 `metadata.json` at its pinned commit, never inferred from naming conventions —
 `lez_core` lives in `logos-execution-zone-module`, and the LEZ
-directories drop the `logos-` prefix entirely.
+directories drop the `logos-` prefix entirely. A submodule that holds several
+modules lists each subdirectory as a `module = <dir>` line in the catalog's
+`.gitmodules`, and each `<dir>/metadata.json` names one: both RLN modules come
+from `logos-rln-modules`.
 
 `sha256` is best-effort: the catalog publishes one for every `.lgx`, GitHub
 release assets often do not. When it is unavailable the field is omitted rather
@@ -105,8 +108,9 @@ checksum-verified on the way in.
 The three headless specs drive **`logosctl`**, which is the runtime and the
 package manager in one — it bundles `package_manager` and `package_downloader`,
 so a single artifact resolves, installs, loads and calls. The two Basecamp specs
-have no such built-in and still populate Basecamp's user directory with `lgpd`
-and `lgpm`, which is how each of those releases stays covered.
+download with `logosctl` too, then install into Basecamp's user directory with
+`lgpm`, since `logosctl` installs only into its own session. That is how the
+`lgpm` release stays covered.
 
 | Spec | What it proves |
 |---|---|

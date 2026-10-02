@@ -4,10 +4,10 @@ release: ""
 
 intro: |
   This doc-test drives Basecamp's real UI against every module and UI app the
-  release set pins: it populates a user directory from the catalog with `lgpd`
-  and `lgpm`, launches Basecamp headless, and walks the interface through the
-  QML inspector — waiting for elements, clicking into views, asserting on what
-  renders, and capturing screenshots.
+  release set pins: it downloads them from the catalog with `logosctl`, installs
+  them into a user directory with `lgpm`, launches Basecamp headless, and walks
+  the interface through the QML inspector — waiting for elements, clicking into
+  views, asserting on what renders, and capturing screenshots.
 
   **Why this builds Basecamp instead of downloading it.** The QML inspector is a
   compile-time feature and is deliberately off in every shipping artifact, so
@@ -61,20 +61,27 @@ sections:
       `--user-dir` tree. `lgpm` routes each package by its manifest `type`:
       `core` to `--modules-dir`, `ui_qml` to `--ui-plugins-dir`.
     steps:
-      - title: "Fetch lgpd and lgpm"
+      - title: "Fetch logosctl and lgpm"
         run: |
-          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-downloader lgpd
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logosctl
           "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
         code_block: |
-          ./doctests/release-set.sh fetch logos-package-downloader lgpd
+          ./doctests/release-set.sh fetch logos-logoscore-cli logosctl
           ./doctests/release-set.sh fetch logos-package-manager lgpm
         check_file: "bin/lgpm"
+      - title: "Start a logosctl daemon to download with"
+        text: |
+          Downloads are served by the `package_downloader` module inside the
+          daemon, so it starts first, in a session of its own.
+        run: "./bin/logosctl --config-dir ./session daemon start --detach"
+        code_block: "logosctl --config-dir ./session daemon start --detach"
       - title: "Install everything the set pins"
         run: |
           mkdir -p testdata/modules testdata/plugins
           MODULES_DIR=./testdata/modules PLUGINS_DIR=./testdata/plugins \
             "$RELEASE_SET_DIR/doctests/release-set.sh" install-all
         code_block: |
+          logosctl --config-dir ./session package download <each> --version <pinned> -o packages
           lgpm --modules-dir ./testdata/modules --ui-plugins-dir ./testdata/plugins \
                install --file packages/<each>.lgx
         expect_contains:
@@ -88,6 +95,12 @@ sections:
           ls testdata/plugins
         expect_contains:
           - "storage_ui"
+      - title: "Stop the download daemon"
+        run: |
+          trap '' TERM
+          ./bin/logosctl --config-dir ./session daemon stop || true
+          true
+        code_block: "logosctl --config-dir ./session daemon stop"
 
   - title: "Build the app under test"
     step: true

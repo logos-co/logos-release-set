@@ -21,7 +21,9 @@ The module-name -> submodule-directory mapping is NOT guessed from naming
 conventions (the real directories include `logos-execution-zone-module` for
 package `lez_core`, and `lez-indexer-module` with no `logos-`
 prefix at all). It is read from each submodule's own `metadata.json` at its
-pinned commit, which is the source of truth.
+pinned commit, which is the source of truth. A submodule holding several modules
+lists each subdirectory as a `module = <dir>` line in .gitmodules, and then each
+`<dir>/metadata.json` names one.
 
 Usage:
     python3 scripts/resolve.py release-set.json -o release-set.lock.json
@@ -439,17 +441,35 @@ def load_catalog_index(logos_repo_url):
 
 
 def parse_gitmodules(text):
-    """path -> url, from a .gitmodules file."""
-    out, path = {}, None
+    """path -> {"url", "modules"}, from a .gitmodules file.
+
+    `modules` holds the submodule's `module = <dir>` lines: the subdirectories
+    the catalog builds instead of the submodule root. Empty for a root module.
+    """
+    out, section = {}, None
+
+    def close():
+        if section and section.get("path"):
+            out[section["path"]] = {"url": section.get("url"),
+                                    "modules": section["modules"]}
+
     for line in (text or "").splitlines():
         line = line.strip()
-        if line.startswith(";") or line.startswith("#"):
+        if not line or line.startswith((";", "#")):
             continue
-        if line.startswith("path"):
-            path = line.split("=", 1)[1].strip()
-        elif line.startswith("url") and path:
-            out[path] = line.split("=", 1)[1].strip()
-            path = None
+        if line.startswith("["):
+            close()
+            section = {"modules": []}
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if section is None:
+            continue
+        if key == "module":
+            section["modules"].append(value)
+        elif key in ("path", "url"):
+            section[key] = value
+    close()
     return out
 
 
@@ -457,48 +477,57 @@ _module_map_cache = {}
 _metadata_cache = {}
 
 
+def metadata_name(slug, path, sha):
+    """The `name` in a repo's metadata file at `sha`, or None."""
+    cache_key = (slug, path, sha)
+    if cache_key not in _metadata_cache:
+        text = get_file(slug, path, sha)
+        name = None
+        if text:
+            try:
+                name = json.loads(text).get("name")
+            except json.JSONDecodeError:
+                name = None
+        _metadata_cache[cache_key] = name
+    return _metadata_cache[cache_key]
+
+
 def module_map(catalog_repo, catalog_commit):
-    """{module name -> {dir, repo, repoUrl, commit}} at a catalog commit.
+    """{module name -> {dir, moduleDir, repo, repoUrl, commit}} at a catalog commit.
 
     Two calls give every submodule directory with its gitlink sha and URL; the
-    module name then comes from each submodule's own metadata.json. No guessing.
+    module name then comes from each submodule's own metadata.json, or from
+    each `<moduleDir>/metadata.json` when it holds several. No guessing.
     """
     if catalog_commit in _module_map_cache:
         return _module_map_cache[catalog_commit]
 
     listing = api(f"/repos/{catalog_repo}/contents/submodules?ref={catalog_commit}") or []
-    urls = parse_gitmodules(get_file(catalog_repo, ".gitmodules", catalog_commit))
+    entries = parse_gitmodules(get_file(catalog_repo, ".gitmodules", catalog_commit))
 
     mapping = {}
     for item in listing:
         directory, sha = item.get("name"), item.get("sha")
         # The directory listing reports submodules as type "file"; the .gitmodules
         # entry is what actually confirms one, and gives us its URL.
-        url = urls.get(f"submodules/{directory}")
+        entry = entries.get(f"submodules/{directory}") or {}
+        url = entry.get("url")
         if not url or not sha:
             continue
         slug = url.rstrip("/").removesuffix(".git").split("github.com/")[-1]
 
-        cache_key = (slug, sha)
-        if cache_key not in _metadata_cache:
-            text = get_file(slug, "metadata.json", sha)
-            name = None
-            if text:
-                try:
-                    name = json.loads(text).get("name")
-                except json.JSONDecodeError:
-                    name = None
-            _metadata_cache[cache_key] = name
-        name = _metadata_cache[cache_key]
-        if not name:
-            continue
-
-        mapping[name] = {
-            "dir": directory,
-            "repo": slug,
-            "repoUrl": f"https://github.com/{slug}",
-            "commit": sha,
-        }
+        for module_dir in entry.get("modules") or [None]:
+            path = f"{module_dir}/metadata.json" if module_dir else "metadata.json"
+            name = metadata_name(slug, path, sha)
+            if not name:
+                continue
+            mapping[name] = {
+                "dir": directory,
+                "moduleDir": module_dir,
+                "repo": slug,
+                "repoUrl": f"https://github.com/{slug}",
+                "commit": sha,
+            }
 
     _module_map_cache[catalog_commit] = mapping
     return mapping
@@ -572,13 +601,17 @@ def resolve_catalog_package(name, version, catalog_repo, index):
         # "we didn't look".
         "tag": source_tag_for(source["repo"], source["commit"]),
         "submoduleDir": source["dir"],
+        # The subdirectory of a submodule that holds several modules; null when
+        # the module is the submodule root.
+        "moduleDir": source["moduleDir"],
         "catalogCommit": catalog_commit,
         "catalogReleaseUrl": f"https://github.com/{catalog_repo}/releases/tag/{publisher_ref}",
-        # The catalog's per-module release workflow is named "Release <dir>";
+        # The catalog's per-module release workflow is named "Release <dir>",
+        # after the module's own subdirectory when the submodule holds several;
         # without that hint every package at this commit would report the
         # periodic index-rebuild cron instead.
         "ciRunUrl": ci_run_url(catalog_repo, catalog_commit,
-                               prefer=f"Release {source['dir']}",
+                               prefer=f"Release {source['moduleDir'] or source['dir']}",
                                before=entry_index.get("releasedAt")),
         "lgx": {
             "url": entry_index.get("url"),

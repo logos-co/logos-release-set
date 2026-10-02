@@ -10,7 +10,7 @@
 #   release-set.sh fetch <component> <bin>  download + extract a released binary
 #   release-set.sh path <bin>               print the REAL path behind ./bin/<bin>
 #   release-set.sh ctl-install <pkg>        logosctl download + verify + install
-#   release-set.sh install <pkg> [--ui]     lgpd download + verify + lgpm install
+#   release-set.sh install <pkg> [--ui]     logosctl download + verify + lgpm install
 #
 # Exit code 78 means "this artifact is not published for this platform" — the
 # caller should SKIP rather than fail. See the release-set workflow.
@@ -92,7 +92,7 @@ lock, group, name = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
 # Which field IS the pin depends on the group, and they are not
 # interchangeable: apps are pinned by release tag, catalog packages by version.
 # Catalog entries also carry the source repo's tag when it has one ("v2.0.1"
-# against version "2.0.1") — feeding that to `lgpd --version` asks for a
+# against version "2.0.1") — feeding that to `package download --version` asks for a
 # version that does not exist.
 key = "tag" if group in ("apps", "devUtils") else "version"
 for item in lock.get(group, []):
@@ -131,7 +131,7 @@ PY
 # logos-logoscore-cli ships logoscore-* and logosctl-* side by side, and picking
 # on platform alone would take whichever the resolver sorted first. So prefer
 # the asset whose filename starts with the binary we were asked for — every repo
-# names its assets that way (lgpd-, lgpm-, LogosBasecamp-) — and fall back to
+# names its assets that way (logosctl-, lgpm-, LogosBasecamp-) — and fall back to
 # the first platform match when nothing does.
 asset_url() {
   require_lock
@@ -285,58 +285,56 @@ print(f"    sha256 OK ({digest[:12]}…)")
 PY
 }
 
-# ctl-install — logosctl bundles package_downloader and package_manager, so one
-# binary does what lgpd and lgpm do below. Download and install stay two steps
-# rather than one `package install --version`: the release set's claim is about
-# a specific FILE, so the .lgx must be on disk to hash before anything unpacks
-# it. Needs a running daemon — that is where both package modules live.
-cmd_ctl_install() {
-  local pkg="${1:?usage: ctl-install <package>}"
-  local out file
-  pinned_package "$pkg"
-
+# ctl_download <pkg> — download the pinned .lgx with logosctl and verify it;
+# sets FILE. Download and install stay two steps rather than one
+# `package install --version`: the release set's claim is about a specific FILE,
+# so the .lgx must be on disk to hash before anything unpacks it. Needs a running
+# daemon — its package_downloader module does the download.
+ctl_download() {
+  local pkg="$1" out
   mkdir -p packages
   echo "==> logosctl package download $pkg --version $PKG_VERSION"
   # --json prints the download record itself -- {"name","path","version"} --
   # not an RPC envelope around it, so `path` is top level.
   out="$("$BIN/logosctl" --config-dir "$SESSION" package download "$pkg" \
            --version "$PKG_VERSION" -o packages --json)"
-  file="$(printf '%s' "$out" |
+  FILE="$(printf '%s' "$out" |
           python3 -c 'import json,sys; print(json.load(sys.stdin)["path"])')" ||
     die "no .lgx path in: $out"
 
-  verify_lgx "$pkg" "$file"
+  verify_lgx "$pkg" "$FILE"
+}
+
+# ctl-install — download, then install into logosctl's own session.
+cmd_ctl_install() {
+  local pkg="${1:?usage: ctl-install <package>}"
+  pinned_package "$pkg"
+  ctl_download "$pkg"
 
   # Routed by the package's own manifest type — a core module lands in
   # <session>/modules, a ui_qml plugin in <session>/plugins.
-  "$BIN/logosctl" --config-dir "$SESSION" package install --file "$file" -y
+  "$BIN/logosctl" --config-dir "$SESSION" package install --file "$FILE" -y
 }
 
+# install — download with logosctl, then install with lgpm into a directory of
+# our choosing: Basecamp's --user-dir tree, which logosctl does not write to.
 cmd_install() {
   local pkg="${1:?usage: install <package> [--ui]}"
   local ui="${2:-}"
-  local file
   pinned_package "$pkg"
 
-  # Where installs land. Basecamp wants them under a --user-dir tree.
-  # Override with MODULES_DIR / PLUGINS_DIR.
+  # Where installs land. Override with MODULES_DIR / PLUGINS_DIR.
   local modules_dir="${MODULES_DIR:-./modules}"
   local plugins_dir="${PLUGINS_DIR:-./plugins}"
+  mkdir -p "$modules_dir" "$plugins_dir"
 
-  mkdir -p packages "$modules_dir" "$plugins_dir"
-  echo "==> lgpd download $pkg --version $PKG_VERSION"
-  "$BIN/lgpd" download "$pkg" --version "$PKG_VERSION" -o packages
-
-  file="$(find packages -name "$pkg-*.lgx" -print -quit)"
-  [ -n "$file" ] || die "lgpd produced no .lgx for $pkg"
-
-  verify_lgx "$pkg" "$file"
+  ctl_download "$pkg"
 
   if [ "$ui" = "--ui" ]; then
     "$BIN/lgpm" --modules-dir "$modules_dir" --ui-plugins-dir "$plugins_dir" \
-      install --file "$file"
+      install --file "$FILE"
   else
-    "$BIN/lgpm" --modules-dir "$modules_dir" install --file "$file"
+    "$BIN/lgpm" --modules-dir "$modules_dir" install --file "$FILE"
   fi
 }
 
