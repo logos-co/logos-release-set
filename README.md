@@ -114,17 +114,22 @@ download with `logosctl` too, then install into Basecamp's user directory with
 
 | Spec | What it proves |
 |---|---|
-| `headless-storage-module` | Installs, initializes and drives the pinned storage node; a probe module calls it and catches its events; `/metrics` is scraped |
+| `headless-storage-module` | Installs the pinned storage module, waits for the node the package downloader starts and drives it; a probe module calls it and catches its events; `/metrics` is scraped |
 | `headless-delivery-module` | Same for delivery, subscribing before start so `nodeStarted` is deterministic |
-| `headless-blockchain-module` | Same for blockchain, joined to the testnet with the operator guide's peer set |
+| `headless-blockchain-module` | Same for blockchain, joined to the testnet with the guide's peer set |
 | `basecamp-appimage-smoke` | The **shipped** Basecamp artifact boots on a user-dir full of pinned modules and stays clean |
 | `basecamp-ui` | Basecamp's UI actually works, driven headlessly through the QML inspector |
 
-Initialization follows the
-[Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide),
-with one deliberate deviation: CI runners have no public IP or inbound ports, so
-the specs use `"nat": "none"` instead of `extip:<public-ip>` and stop short of
-faucet funding and blend-network participation.
+Initialization follows the [Run a Logos node](https://docs.logos.co/run-a-node)
+guide for Testnet v0.3, with one deliberate deviation: CI runners have no public
+IP or inbound ports, so the specs leave out the guide's `"nat": "extip:<public-ip>"`
+and stop short of faucet funding and blend-network participation.
+
+Every daemon the specs start gets a `HOME` inside its working directory.
+`logosctl`'s package downloader starts a storage node as soon as the daemon is
+up, and its default configuration keeps the node's data in `~/.logos_storage`,
+which is where Basecamp's storage node keeps it too. A local run therefore never
+touches that directory.
 
 Each headless spec also builds a small **probe module** with the pinned
 `logos-module-builder`, which calls its target and subscribes to one of its

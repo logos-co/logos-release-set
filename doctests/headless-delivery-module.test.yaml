@@ -10,7 +10,7 @@ intro: |
   catalog at the pinned version and checksum-verified before install.
 
   Initialization follows the
-  [Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide),
+  [Run a Logos node](https://docs.logos.co/run-a-node) guide for Testnet v0.3,
   adjusted for a CI host with no public IP.
 
   A **probe module** — built with the `logos-module-builder` release this set
@@ -28,7 +28,7 @@ what_you_build: "The pinned `delivery_module`, installed from the catalog, start
 what_you_learn:
   - How a release set pins tools by release tag and modules by catalog version
   - How to install an exact module version with `logosctl package download --version`
-  - How to create and start a delivery node headlessly, following the node operator guide
+  - How to create and start a delivery node headlessly, following the Run a Logos node guide
   - How to subscribe to a dependency's typed events from another module
   - Why a probe subscribes before the lifecycle call that fires the event
   - 'Which module serves `/metrics`, and how `"format": "text"` picks the collection convention'
@@ -87,7 +87,13 @@ sections:
           `--detach` is not `&`. Backgrounding returns before the transports
           have bound; `--detach` returns only once the daemon has published its
           state file and is answering commands.
-        run: "./bin/logosctl --config-dir ./session daemon start --detach"
+          The daemon gets a `HOME` inside this run's directory. As soon as it
+          is up, the package downloader starts the storage node with its default
+          configuration, which keeps the node's data in `~/.logos_storage`; this
+          keeps a run clear of a real node there, such as Basecamp's.
+        run: |
+          mkdir -p home
+          HOME="$(pwd)/home" ./bin/logosctl --config-dir ./session daemon start --detach
         code_block: "logosctl --config-dir ./session daemon start --detach"
       - title: "Confirm it is up"
         run: "./bin/logosctl --config-dir ./session daemon status"
@@ -365,44 +371,42 @@ sections:
   - title: "Initialize the node"
     step: true
     text: |
-      The node operator guide's delivery step, with one substitution forced by
-      the release set itself.
+      The [Run a Logos node](https://docs.logos.co/run-a-node) guide's delivery
+      step: a kernel-only node, which is what a node operator runs. The
+      `logos.test` preset supplies the network's bootstrap settings. A kernel
+      node relays, but has no messaging client, so `send`, `subscribe` and the
+      `channel*` calls are unavailable while `getNodeInfo` keeps working.
 
-      The guide configures `"preset": "logos.test"`. **That preset does not
-      exist in the `delivery_module` version this set pins** — v0.1.3 documents
-      only `"twn"` and `"logos.dev"`, and `logos.test` appears only on the
-      module's unreleased `master`. Passing it produces
-      `Failed to create Delivery context`. Since the catalog publishes nothing
-      newer than 0.1.3, this doc-test uses `"logos.dev"` — the Logos Dev Network
-      preset the pinned version documents, which supplies cluster ID, entry
-      nodes, sharding and mix settings on its own.
-
-      The guide's `"nat": "extip:<public-ip>"` is also dropped: a CI runner has
-      no public IP, and outbound-only is enough to bring the node up.
-
-      Extended Kademlia discovery is intentionally left out. `start` performs a
-      **blocking** DHT bootstrap that only returns once the DHT is joined; in a
-      headless CI run that never completes and the call times out.
+      The guide's `"nat": "extip:<public-ip>"` is dropped: a CI runner has no
+      public IP, and outbound-only is enough to bring the node up.
     steps:
       - title: "Write the node config"
         run: |
           cat > delivery-config.json <<'EOF'
           {
-            "mode": "Core",
-            "preset": "logos.dev",
-            "logLevel": "INFO",
-            "tcpPort": 30303,
-            "discv5UdpPort": 9000
+            "entryLayer": "kernel",
+            "kernelConf": {
+              "preset": "logos.test",
+              "relay": true,
+              "logLevel": "INFO",
+              "tcpPort": 30303,
+              "discv5UdpPort": 9000,
+              "discv5Discovery": true
+            }
           }
           EOF
           cat delivery-config.json
         code_block: |
           {
-            "mode": "Core",
-            "preset": "logos.dev",
-            "logLevel": "INFO",
-            "tcpPort": 30303,
-            "discv5UdpPort": 9000
+            "entryLayer": "kernel",
+            "kernelConf": {
+              "preset": "logos.test",
+              "relay": true,
+              "logLevel": "INFO",
+              "tcpPort": 30303,
+              "discv5UdpPort": 9000,
+              "discv5Discovery": true
+            }
           }
         check_file: "delivery-config.json"
       - title: "createNode"
@@ -417,9 +421,11 @@ sections:
           - '"success":true'
       - title: "Verify the node is up"
         run: |
+          ./bin/logosctl --config-dir ./session call delivery_module getAvailableNodeInfoIDs
           ./bin/logosctl --config-dir ./session call delivery_module getNodeInfo Version
           ./bin/logosctl --config-dir ./session call delivery_module getNodeInfo MyBoundPorts
         code_block: |
+          logosctl call delivery_module getAvailableNodeInfoIDs
           logosctl call delivery_module getNodeInfo Version
           logosctl call delivery_module getNodeInfo MyBoundPorts
         expect_contains:
