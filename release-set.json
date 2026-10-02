@@ -33,8 +33,8 @@
     { "name": "delivery_module",         "version": "0.3.0" },
     { "name": "lez_core",                "version": "0.5.0" },
     { "name": "lez_indexer_module",      "version": "1.2.0" },
-    { "name": "liblogos_lez_rln_module", "version": "CHANGE-ME" },
-    { "name": "liblogos_rln_module",     "version": "CHANGE-ME" },
+    { "name": "liblogos_lez_rln_module", "version": "4.2.1" },
+    { "name": "liblogos_rln_module",     "version": "0.10.0" },
     { "name": "libp2p_module",           "version": "1.1.0" },
     { "name": "openmetrics",             "version": "0.1.1" },
     { "name": "storage_module",          "version": "3.0.0" }
