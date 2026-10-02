@@ -11,8 +11,9 @@ intro: |
   package manager in one — is downloaded from its GitHub release at the tag the
   release set pins; `storage_module` is pulled from the module catalog at the
   pinned version and installed into the session, checksum-verified against the
-  catalog index. The initialization follows the
-  [Logos node operator guide](https://roadmap.logos.co/testnets/logos-node-operator-guide).
+  catalog index. The node comes up as the
+  [Run a Logos node](https://docs.logos.co/run-a-node) guide describes for
+  Testnet v0.3: the package downloader starts it.
 
   Then it goes two steps further than "the module loads". It builds a small
   **probe module** with the `logos-module-builder` release the set pins, and
@@ -29,7 +30,7 @@ what_you_build: "The pinned `storage_module`, installed from the catalog and dri
 what_you_learn:
   - How a release set pins tools by release tag and modules by catalog version
   - How to install an exact module version with `logosctl package download --version`
-  - How to initialize the storage node headlessly, following the node operator guide
+  - How the package downloader starts the storage node, and how to wait for it
   - How to observe a module's events with `logosctl watch`
   - How to build a probe module that calls a dependency and subscribes to its events
   - Which module serves `/metrics`, and how it scrapes others over IPC
@@ -100,7 +101,13 @@ sections:
           `--detach` is not `&`. Backgrounding returns before the transports
           have bound; `--detach` returns only once the daemon has published its
           state file and is answering commands, so nothing below races the boot.
-        run: "./bin/logosctl --config-dir ./session daemon start --detach"
+          The daemon gets a `HOME` inside this run's directory. As soon as it
+          is up, the package downloader starts the storage node with its default
+          configuration, which keeps the node's data in `~/.logos_storage`; this
+          keeps a run clear of a real node there, such as Basecamp's.
+        run: |
+          mkdir -p home
+          HOME="$(pwd)/home" ./bin/logosctl --config-dir ./session daemon start --detach
         code_block: "logosctl --config-dir ./session daemon start --detach"
       - title: "Confirm it is up"
         run: "./bin/logosctl --config-dir ./session daemon status"
@@ -191,7 +198,7 @@ sections:
             version "$VER"
 
             method moduleVersion() -> tstr
-            method uploadUrl(filePath: tstr, chunkSize: int) -> result
+            method uploadUrl(filePath: tstr, chunkSize: int, advertise: bool) -> result
 
             event storageUploadDone(payload: tstr)
           }
@@ -202,7 +209,7 @@ sections:
             version "<pinned>"
 
             method moduleVersion() -> tstr
-            method uploadUrl(filePath: tstr, chunkSize: int) -> result
+            method uploadUrl(filePath: tstr, chunkSize: int, advertise: bool) -> result
 
             event storageUploadDone(payload: tstr)
           }
@@ -412,69 +419,36 @@ sections:
           - "storage_module"
           - '"status":"loaded"'
 
-  - title: "Initialize the node"
+  - title: "Wait for the storage node"
     step: true
     text: |
-      This is the node operator guide's storage step. Its config is reproduced
-      key for key — `data-dir`, `log-level`, `listen-ip`, `listen-port`,
-      `disc-port` and `network: "logos.test"`, the key that selects the testnet.
-      The one addition is `log-file`, so the node's log lands somewhere the
-      doc-test can show you.
-
-      `init` is synchronous; `start` completes asynchronously and announces
-      itself with a `storageStart` event, so we begin watching before calling it.
+      Testnet v0.3 changed how a storage node comes up. The package downloader
+      fetches packages through `storage_module`, so it starts the node itself,
+      with its saved configuration or the defaults on first use; as the
+      [Run a Logos node](https://docs.logos.co/run-a-node) guide says, there is
+      nothing to `init` or `start`. Installing the pinned package reloaded the
+      module and the downloader started it again, so the node that comes up is
+      the pinned one.
     steps:
-      - title: "Write the node config"
+      - title: "Wait until it is running"
+        text: "Startup can take a few minutes."
         run: |
-          mkdir -p storage-data
-          cat > config.json <<EOF
-          {
-            "data-dir": "$(pwd)/storage-data",
-            "log-level": "INFO",
-            "log-file": "$(pwd)/storage-data/storage.log",
-            "listen-ip": "0.0.0.0",
-            "listen-port": 8091,
-            "disc-port": 8090,
-            "network": "logos.test"
-          }
-          EOF
-          cat config.json
-        code_block: |
-          {
-            "data-dir": "./storage-data",
-            "log-level": "INFO",
-            "log-file": "./storage-data/storage.log",
-            "listen-ip": "0.0.0.0",
-            "listen-port": 8091,
-            "disc-port": 8090,
-            "network": "logos.test"
-          }
-        check_file: "config.json"
-      - title: "Watch for the start event"
-        run: "sh -c './bin/logosctl --config-dir ./session watch storage_module --event storageStart --json > start-event.txt 2>&1 & echo $! > watch.pid'"
-        code_block: "logosctl watch storage_module --event storageStart --json"
-      - run: "sleep 2"
-      - title: "init"
-        run: "./bin/logosctl --config-dir ./session call storage_module init @config.json"
-        code_block: "logosctl call storage_module init @config.json"
+          out=""
+          for i in $(seq 1 90); do
+            out="$(./bin/logosctl --config-dir ./session call storage_module isRunning 2>&1)"
+            case "$out" in *'"result":true'*) break ;; esac
+            sleep 2
+          done
+          printf '%s\n' "$out"
+        code_block: "logosctl call storage_module isRunning"
         expect_contains:
           - '"result":true'
-      - title: "start"
-        run: "./bin/logosctl --config-dir ./session call storage_module start"
-        code_block: "logosctl call storage_module start"
+      - title: "Inspect it"
+        text: "`debug` reports the node's peer ID (`id`) and its signed peer record (`spr`)."
+        run: "./bin/logosctl --config-dir ./session call storage_module debug"
+        code_block: "logosctl call storage_module debug | jq .result.value.id"
         expect_contains:
-          - '"result":true'
-      - title: "Confirm the start event arrived"
-        run: |
-          sleep 5
-          kill "$(cat watch.pid)" 2>/dev/null || true
-          cat start-event.txt
-        code_block: "cat start-event.txt"
-        expect_contains:
-          - "storageStart"
-        post_text: |
-          The node is up and announcing it. Everything from here on is a real
-          round-trip into the pinned `.lgx`.
+          - "spr"
 
   - title: "Drive storage_module through the probe"
     step: true
@@ -502,17 +476,29 @@ sections:
           # in {"status":"ok",...}, so asserting a bare "ok" would pass even
           # when the subscription failed to register.
           - '"result":"ok"'
+      - title: "Watch for the upload event"
+        run: "sh -c './bin/logosctl --config-dir ./session watch storage_module --event storageUploadDone --json > upload-event.txt 2>&1 & echo $! > watch.pid'"
+        code_block: "logosctl watch storage_module --event storageUploadDone --json"
+      - run: "sleep 2"
       - title: "Trigger an upload"
         text: |
           Uploading a file makes `storage_module` emit `storageUploadDone`. The
-          probe is subscribed, so the payload lands in its state.
+          probe is subscribed, so the payload lands in its state. The third
+          argument, `advertise`, announces the new content to the network.
         run: |
           echo "hello from the release set" > hello.txt
-          ./bin/logosctl --config-dir ./session call storage_module uploadUrl "$(pwd)/hello.txt" 65536
-        code_block: 'logosctl call storage_module uploadUrl "$(pwd)/hello.txt" 65536'
+          ./bin/logosctl --config-dir ./session call storage_module uploadUrl "$(pwd)/hello.txt" 65536 true
+        code_block: 'logosctl call storage_module uploadUrl "$(pwd)/hello.txt" 65536 true'
         expect_contains:
-          - '"result"'
-      - run: "sleep 5"
+          - '"success":true'
+      - title: "Confirm the event arrived"
+        run: |
+          for i in $(seq 1 30); do grep -q cid upload-event.txt && break; sleep 1; done
+          kill "$(cat watch.pid)" 2>/dev/null || true
+          cat upload-event.txt
+        code_block: "cat upload-event.txt"
+        expect_contains:
+          - "storageUploadDone"
       - title: "Read the event back out of the probe"
         run: "./bin/logosctl --config-dir ./session call probe_storage lastUploadEvent"
         code_block: "logosctl call probe_storage lastUploadEvent"
