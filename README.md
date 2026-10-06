@@ -101,7 +101,7 @@ python3 scripts/resolve.py release-set.json -o release-set.lock.json \
 ## The proof: `doctests/`
 
 Five executable specs, run on **linux-x86_64, linux-arm64 and macOS arm64**;
-the storage and delivery specs also run on **Windows x86_64** (see
+the storage, delivery and Basecamp UI specs also run on **Windows x86_64** (see
 [Windows](#windows)). They use only released artifacts: tools downloaded from GitHub releases at the
 pinned tags, modules installed from the catalog at the pinned versions and
 checksum-verified on the way in.
@@ -161,7 +161,8 @@ Everything is the **portable** variant, end to end. A dev build RPATHs into
 
 ### Windows
 
-`headless-storage-module` and `headless-delivery-module` also run on Windows.
+`headless-storage-module`, `headless-delivery-module` and `basecamp-ui` also
+run on Windows.
 Nix does not run there, so the `doctests-windows` job calls
 [logos-windows-ci](https://github.com/logos-co/logos-windows-ci). It builds this
 repo's `flake.nix` on Linux and stages each target as a directory beside the
@@ -170,14 +171,20 @@ script it generates from the spec's Windows steps:
 | Target | What it holds |
 |---|---|
 | `logosctl` | The pinned release's `logosctl-x86_64-windows.zip`, unpacked: the artifact users download, not a build of it |
+| `lgpm` | The same for `lgpm-x86_64-windows.zip` (`basecamp-ui`) |
 | `probe-storage`, `probe-delivery` | The spec's probe, cross-built with the pinned builder from `doctests/probes/` |
 | `release-set` | `release-set.json`, and `doctests/windows.sh` to read it: Windows has no lock |
+| `bin-bundle-dir-inspector`, `logos-qt-mcp` | `basecamp-ui` only: Basecamp's inspector bundle and test driver, cross-built from its own flake at the pinned commit (`extra-targets`) |
 
 `scripts/windows-plan.py` pins the flake to the release set with
-`--override-input` (the builder tag, and the zip's URL from the lock) and
-decides which specs get a Windows leg. On Windows the helper downloads the
+`--override-input` (the builder tag, and the zips' URLs from the lock) and
+decides which specs get a Windows leg. Basecamp's outputs are not inputs of
+this flake: the plan hands them to logos-windows-ci as `extra-targets` refs at
+the commit the lock resolved, so they build with Basecamp's own lock. On Windows the helper downloads the
 pinned modules with `logosctl` and checks each `.lgx` against the `sha256` the
-catalog index publishes, the index the resolver reads. `openmetrics` publishes
+catalog index publishes, the index the resolver reads. `basecamp-ui` installs
+only the packages whose index entry has a `windows-x86_64` variant and names
+the rest, then asserts the UI apps and core modules among them. `openmetrics` publishes
 no Windows build, so the metrics sections run on Linux and macOS only. The
 other specs have no Windows half (`blockchain_module` publishes no Windows
 build either), so they are skips that say so.
@@ -301,7 +308,7 @@ and Basecamp's AppImages alone are ~270 MB each.
 
 ```
 release-set.json                    the input — placeholders on main
-flake.nix                           what the Windows legs stage: logosctl, probes, pins
+flake.nix                           what the Windows legs stage: logosctl, lgpm, probes, pins
 scripts/resolve.py                  pins  -> release-set.lock.json
 scripts/select-specs.py             which specs can run on a platform, and why not
 scripts/render-release.py           lock + results -> release notes

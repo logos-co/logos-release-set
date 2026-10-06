@@ -11,13 +11,19 @@
       url = "https://github.com/logos-co/logos-logoscore-cli/releases/download/0.3.1/logosctl-x86_64-windows.zip";
       flake = false;
     };
+    # basecamp-ui installs into Basecamp's user dir with the released lgpm.
+    lgpm-windows = {
+      url = "https://github.com/logos-co/logos-package-manager/releases/download/0.3.1/lgpm-x86_64-windows.zip";
+      flake = false;
+    };
   };
 
   # Nix does not run on Windows. logos-windows-ci stages each target X as X/
   # beside the generated script, so these names are the paths the specs' Windows
   # steps use; the probes match the `nix build -o probe-X` links of the other
-  # platforms.
-  outputs = { logos-module-builder, logosctl-windows, ... }:
+  # platforms. Basecamp's inspector bundle and test driver come from its own flake
+  # at the pinned commit, staged as extra targets (scripts/windows-plan.py).
+  outputs = { logos-module-builder, logosctl-windows, lgpm-windows, ... }:
     let
       probe = dir: logos-module-builder.lib.mkLogosModule {
         src = dir;
@@ -29,6 +35,9 @@
       packages.x86_64-windows = {
         logosctl = pkgs.runCommand "logosctl-x86_64-windows" { } ''
           ln -s ${logosctl-windows} $out
+        '';
+        lgpm = pkgs.runCommand "lgpm-x86_64-windows" { } ''
+          ln -s ${lgpm-windows} $out
         '';
         # The same sources the specs write, which check-probes.py keeps in step.
         probe-storage = (probe ./doctests/probes/storage).packages.x86_64-windows.lgx-portable;

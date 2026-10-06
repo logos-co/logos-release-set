@@ -34,9 +34,10 @@ BUILDER = ["logos-module-builder"]
 #               flake refs and publish no per-platform binaries), but recorded
 #               so each artifact can point at the doc-tests that covered it.
 #   windows   — the spec's Windows half, if it has one: what that half needs
-#               instead of `packages`, and the flake.nix targets its leg stages
-#               besides logosctl/ and release-set/. A spec without one is
-#               skipped on Windows.
+#               instead of `packages`, the flake.nix targets its leg stages
+#               besides logosctl/ and release-set/, and `basecamp` when it also
+#               stages Basecamp's own outputs at the pinned commit. A spec
+#               without one is skipped on Windows.
 SPECS = {
     # Each headless spec also loads `openmetrics` and scrapes /metrics, so that
     # package must publish this platform's variant too. It publishes no Windows
@@ -57,8 +58,15 @@ SPECS = {
     # Launches the shipped Basecamp artifact, so that artifact must exist.
     "basecamp-appimage-smoke":    {"apps": PM_TOOLS + ["logos-basecamp"],
                                    "packages": ["*"], "devUtils": []},
-    # Builds Basecamp from the pinned commit, so it needs no Basecamp asset.
-    "basecamp-ui":                {"apps": PM_TOOLS, "packages": ["*"], "devUtils": []},
+    # Builds Basecamp from the pinned commit, so it needs no Basecamp asset. On
+    # Windows it installs what publishes a Windows variant and asserts the
+    # packages below, which must.
+    "basecamp-ui":                {"apps": PM_TOOLS, "packages": ["*"], "devUtils": [],
+                                   "windows": {"packages": ["storage_ui", "chat_ui",
+                                                            "storage_module", "chat_module",
+                                                            "delivery_module"],
+                                               "targets": ["lgpm"],
+                                               "basecamp": True}},
 }
 
 
