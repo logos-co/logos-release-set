@@ -101,7 +101,7 @@ python3 scripts/resolve.py release-set.json -o release-set.lock.json \
 ## The proof: `doctests/`
 
 Five executable specs, run on **linux-x86_64, linux-arm64 and macOS arm64**;
-the storage, delivery and Basecamp UI specs also run on **Windows x86_64** (see
+every spec but the blockchain one also runs on **Windows x86_64** (see
 [Windows](#windows)). They use only released artifacts: tools downloaded from GitHub releases at the
 pinned tags, modules installed from the catalog at the pinned versions and
 checksum-verified on the way in.
@@ -118,7 +118,7 @@ download with `logosctl` too, then install into Basecamp's user directory with
 | `headless-storage-module` | Installs the pinned storage module, waits for the node the package downloader starts and drives it; a probe module calls it and catches its events; `/metrics` is scraped |
 | `headless-delivery-module` | Same for delivery, subscribing before start so `nodeStarted` is deterministic |
 | `headless-blockchain-module` | Same for blockchain, joined to the testnet with the guide's peer set |
-| `basecamp-appimage-smoke` | The **shipped** Basecamp artifact boots on a user-dir full of pinned modules and stays clean |
+| `basecamp-appimage-smoke` | The **shipped** Basecamp artifact boots on a user-dir full of pinned modules and stays clean; on Windows its installer installs it and its uninstaller removes it |
 | `basecamp-ui` | Basecamp's UI actually works, driven headlessly through the QML inspector |
 
 Initialization follows the [Run a Logos node](https://docs.logos.co/run-a-node)
@@ -161,8 +161,8 @@ Everything is the **portable** variant, end to end. A dev build RPATHs into
 
 ### Windows
 
-`headless-storage-module`, `headless-delivery-module` and `basecamp-ui` also
-run on Windows.
+`headless-storage-module`, `headless-delivery-module`, `basecamp-appimage-smoke`
+and `basecamp-ui` also run on Windows.
 Nix does not run there, so the `doctests-windows` job calls
 [logos-windows-ci](https://github.com/logos-co/logos-windows-ci). It builds this
 repo's `flake.nix` on Linux and stages each target as a directory beside the
@@ -171,23 +171,29 @@ script it generates from the spec's Windows steps:
 | Target | What it holds |
 |---|---|
 | `logosctl` | The pinned release's `logosctl-x86_64-windows.zip`, unpacked: the artifact users download, not a build of it |
-| `lgpm` | The same for `lgpm-x86_64-windows.zip` (`basecamp-ui`) |
+| `lgpm` | The same for `lgpm-x86_64-windows.zip` (the Basecamp specs) |
+| `basecamp-setup` | The pinned Basecamp release's installer (`basecamp-appimage-smoke`). Staged as `.bin`: logos-windows-ci gates every staged `.exe` as a 64-bit build output, and an NSIS installer is a released 32-bit stub |
 | `probe-storage`, `probe-delivery` | The spec's probe, cross-built with the pinned builder from `doctests/probes/` |
 | `release-set` | `release-set.json`, and `doctests/windows.sh` to read it: Windows has no lock |
 | `bin-bundle-dir-inspector`, `logos-qt-mcp` | `basecamp-ui` only: Basecamp's inspector bundle and test driver, cross-built from its own flake at the pinned commit (`extra-targets`) |
 
 `scripts/windows-plan.py` pins the flake to the release set with
-`--override-input` (the builder tag, and the zips' URLs from the lock) and
+`--override-input` (the builder tag, and the zips' and installer's URLs from the lock) and
 decides which specs get a Windows leg. Basecamp's outputs are not inputs of
 this flake: the plan hands them to logos-windows-ci as `extra-targets` refs at
 the commit the lock resolved, so they build with Basecamp's own lock. On Windows the helper downloads the
 pinned modules with `logosctl` and checks each `.lgx` against the `sha256` the
 catalog index publishes, the index the resolver reads. `basecamp-ui` installs
 only the packages whose index entry has a `windows-x86_64` variant and names
-the rest, then asserts the UI apps and core modules among them. `openmetrics` publishes
-no Windows build, so the metrics sections run on Linux and macOS only. The
-other specs have no Windows half (`blockchain_module` publishes no Windows
-build either), so they are skips that say so.
+the rest, then asserts the UI apps and core modules among them.
+`basecamp-appimage-smoke` installs the same way, then runs the shipped
+installer silently into a folder inside the run, launches the installed copy,
+and uninstalls it. A silent install registers an uninstaller and adds
+shortcuts for the current user, so a Basecamp already installed there would
+lose its own: the helper saves them before the install and restores them after
+the uninstall. `headless-blockchain-module` has no Windows half
+(`blockchain_module` publishes no Windows build), so it is a skip that says
+so.
 
 The probe sources live twice: inline in the specs, which build them on Linux and
 macOS, and in `doctests/probes/`, which the flake cross-builds.

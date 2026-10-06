@@ -10,8 +10,8 @@ against them on windows-latest. From release-set.lock.json this decides:
             whether its staged .lgx files must carry a Windows variant
     any     whether there is a leg at all
     args    --override-input pairs pinning flake.nix to the release set: the
-            builder tag it pins, and the logosctl and lgpm Windows zips of the
-            releases it pins
+            builder tag it pins, the logosctl and lgpm Windows zips and the
+            Basecamp installer of the releases it pins
 
 and writes skip records naming why the other specs do not run on Windows.
 
@@ -42,6 +42,12 @@ PLATFORM = select.WINDOWS
 # that reads them (Windows has no lock).
 COMMON_TARGETS = ["logosctl", "release-set"]
 
+# The released Windows artifacts flake.nix stages: (app, asset name prefix,
+# flake input).
+WINDOWS_ASSETS = [("logos-logoscore-cli", "logosctl", "logosctl-windows"),
+                  ("logos-package-manager", "lgpm", "lgpm-windows"),
+                  ("logos-basecamp", "LogosBasecamp", "basecamp-setup")]
+
 
 def override_args(lock):
     entries = select.index_by_name(lock)
@@ -50,10 +56,14 @@ def override_args(lock):
     if builder:
         ref = builder.get("flakeRef") or f"github:{builder['repo']}/{builder['tag']}"
         args += ["--override-input", "logos-module-builder", ref]
-    for app, binname in (("logos-logoscore-cli", "logosctl"), ("logos-package-manager", "lgpm")):
+    for app, prefix, flake_input in WINDOWS_ASSETS:
         for asset in (entries.get(app) or {}).get("assets", []):
-            if asset.get("platform") == PLATFORM and asset["name"].startswith(binname):
-                args += ["--override-input", f"{binname}-windows", asset["url"]]
+            if asset.get("platform") == PLATFORM and asset["name"].startswith(prefix):
+                url = asset["url"]
+                # A zip unpacks like a tarball; the installer is one file.
+                if url.endswith(".exe"):
+                    url = "file+" + url
+                args += ["--override-input", flake_input, url]
                 break
     return args
 

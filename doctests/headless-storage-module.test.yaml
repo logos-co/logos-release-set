@@ -28,8 +28,7 @@ intro: |
   The spec runs on Windows too. Nix does not run there, so CI prepares that leg
   on Linux: it unpacks the pinned release's `logosctl-x86_64-windows.zip` and
   cross-builds the probe with the pinned builder, then runs the steps marked
-  for Windows on `windows-latest`. `openmetrics` publishes no Windows build, so
-  the metrics section runs on Linux and macOS only.
+  for Windows on `windows-latest`, metrics included.
 
 what_you_build: "The pinned `storage_module`, installed from the catalog and driven through a `logosctl` daemon and a purpose-built probe module."
 
@@ -205,8 +204,17 @@ sections:
         platform: [linux, macos]
         text: |
           `openmetrics` is the module that serves the `/metrics` endpoint later
-          in this doc-test. It publishes no Windows build.
+          in this doc-test.
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" ctl-install openmetrics'
+        code_block: |
+          logosctl package download openmetrics --version <pinned> -o packages
+          logosctl package install --file packages/openmetrics-*.lgx -y
+        expect_contains:
+          - "sha256 OK"
+          - '"installed":['
+      - title: "Install the metrics scraper too"
+        platform: windows
+        run: "bash release-set/windows.sh ctl-install openmetrics"
         code_block: |
           logosctl package download openmetrics --version <pinned> -o packages
           logosctl package install --file packages/openmetrics-*.lgx -y
@@ -563,7 +571,6 @@ sections:
 
   - title: "Expose the metrics endpoint"
     step: true
-    platform: [linux, macos]
     text: |
       `/metrics` is served by the **`openmetrics`** module itself: it runs an HTTP
       server (libmicrohttpd) and, on every scrape, calls the metrics convention
