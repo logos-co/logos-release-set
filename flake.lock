@@ -1,5 +1,17 @@
 {
   "nodes": {
+    "basecamp-setup": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-zL94LAEIbdv+rEKXXo8Vdym6IoZWNcgsnV2DeGSWAFs=",
+        "type": "file",
+        "url": "https://github.com/logos-co/logos-basecamp/releases/download/0.3.2/LogosBasecamp-Desktop-v0.3.2-f2fae6-x86_64-setup.exe"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://github.com/logos-co/logos-basecamp/releases/download/0.3.2/LogosBasecamp-Desktop-v0.3.2-f2fae6-x86_64-setup.exe"
+      }
+    },
     "default-container": {
       "inputs": {
         "logos-container": "logos-container",
@@ -16596,6 +16608,7 @@
     },
     "root": {
       "inputs": {
+        "basecamp-setup": "basecamp-setup",
         "lgpm-windows": "lgpm-windows",
         "logos-module-builder": "logos-module-builder",
         "logosctl-windows": "logosctl-windows"

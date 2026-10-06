@@ -40,24 +40,27 @@ BUILDER = ["logos-module-builder"]
 #               without one is skipped on Windows.
 SPECS = {
     # Each headless spec also loads `openmetrics` and scrapes /metrics, so that
-    # package must publish this platform's variant too. It publishes no Windows
-    # build, so the specs' metrics sections are Linux and macOS only.
+    # package must publish this platform's variant too.
     "headless-storage-module":    {"apps": CTL,
                                    "packages": ["storage_module", "openmetrics"],
                                    "devUtils": BUILDER,
-                                   "windows": {"packages": ["storage_module"],
+                                   "windows": {"packages": ["storage_module", "openmetrics"],
                                                "targets": ["probe-storage"]}},
     "headless-delivery-module":   {"apps": CTL,
                                    "packages": ["delivery_module", "openmetrics"],
                                    "devUtils": BUILDER,
-                                   "windows": {"packages": ["delivery_module"],
+                                   "windows": {"packages": ["delivery_module", "openmetrics"],
                                                "targets": ["probe-delivery"]}},
     "headless-blockchain-module": {"apps": CTL,
                                    "packages": ["blockchain_module", "openmetrics"],
                                    "devUtils": BUILDER},
-    # Launches the shipped Basecamp artifact, so that artifact must exist.
+    # Launches the shipped Basecamp artifact, so that artifact must exist. On
+    # Windows that is the installer, which the leg runs, launches and removes;
+    # it installs what publishes a Windows variant and checks the packages below.
     "basecamp-appimage-smoke":    {"apps": PM_TOOLS + ["logos-basecamp"],
-                                   "packages": ["*"], "devUtils": []},
+                                   "packages": ["*"], "devUtils": [],
+                                   "windows": {"packages": ["storage_module", "storage_ui"],
+                                               "targets": ["lgpm", "basecamp-setup"]}},
     # Builds Basecamp from the pinned commit, so it needs no Basecamp asset. On
     # Windows it installs what publishes a Windows variant and asserts the
     # packages below, which must.

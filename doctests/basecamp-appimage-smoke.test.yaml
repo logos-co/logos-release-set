@@ -4,9 +4,17 @@ release: ""
 
 intro: |
   This doc-test runs **the artifact a user actually downloads** — the Basecamp
-  AppImage (Linux) or `.dmg` (macOS) attached to the release the release set
-  pins — against a user directory populated with every module and UI app in the
-  set, downloaded from the catalog with `logosctl` and installed with `lgpm`.
+  AppImage (Linux), `.dmg` (macOS) or installer (Windows) attached to the
+  release the release set pins — against a user directory populated with every
+  module and UI app in the set, downloaded from the catalog with `logosctl` and
+  installed with `lgpm`.
+
+  On Windows the artifact is an installer, so that leg also installs Basecamp
+  silently, launches the installed copy and uninstalls it again. Nix does not
+  run there: CI stages the pinned installer and the `logosctl` and `lgpm`
+  release zips on Linux, then runs the steps marked for Windows on
+  `windows-latest`, installing only the packages that publish a Windows
+  variant.
 
   It is deliberately a *smoke* test. Shipping builds have the QML inspector
   compiled out (it is a test-only feature, off in every release artifact), so
@@ -26,7 +34,8 @@ what_you_learn:
   - What "the inspector is off in release builds" means for what is testable
 
 prerequisites:
-  - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64)."
+  - "**A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64), or the Windows leg's staged tree."
+  - "**On Windows:** `basecamp-setup/`, `logosctl/`, `lgpm/` and `release-set/` staged by logos-windows-ci, plus Git Bash. A Basecamp already installed for the same user keeps its registration: the leg saves it before installing and restores it after uninstalling."
   - "**On Linux:** the usual desktop graphics libraries (`libopengl0`, `libgl1`, `libegl1`). The portable bundle loads them from the host, exactly as it would on a real desktop."
   - "**`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API)."
 
@@ -39,9 +48,20 @@ sections:
       for every artifact.
     steps:
       - title: "Resolve"
+        platform: [linux, macos]
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" lock'
         code_block: "./doctests/release-set.sh lock"
         check_file: "release-set.lock.json"
+      - title: "Read the pins"
+        platform: windows
+        text: |
+          Windows resolves nothing. CI read the lock on Linux to stage the
+          pinned installer and tools, and staged `release-set.json` with a
+          helper that reads it.
+        run: "bash release-set/windows.sh pins"
+        code_block: "bash release-set/windows.sh pins"
+        expect_contains:
+          - "logos-basecamp"
 
   - title: "Fetch the package tools"
     step: true
@@ -51,12 +71,27 @@ sections:
       Basecamp's user directory, which `logosctl` does not write to.
     steps:
       - title: "Fetch logosctl and lgpm"
+        platform: [linux, macos]
         run: |
           "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logosctl
           "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
         code_block: |
           ./doctests/release-set.sh fetch logos-logoscore-cli logosctl
           ./doctests/release-set.sh fetch logos-package-manager lgpm
+        check_file: "bin/lgpm"
+      - title: "Use the staged releases"
+        platform: windows
+        text: |
+          On Windows the pinned releases' `logosctl-x86_64-windows.zip` and
+          `lgpm-x86_64-windows.zip` are already here, unpacked as `logosctl/`
+          and `lgpm/`. The helper writes the same `./bin/` wrappers as `fetch`
+          does elsewhere.
+        run: |
+          bash release-set/windows.sh link logosctl
+          bash release-set/windows.sh link lgpm
+        code_block: |
+          bash release-set/windows.sh link logosctl
+          bash release-set/windows.sh link lgpm
         check_file: "bin/lgpm"
       - title: "Start a logosctl daemon to download with"
         text: |
@@ -65,9 +100,20 @@ sections:
           inside this run's directory, because the package downloader also
           starts a storage node, whose default data directory is
           `~/.logos_storage`.
+        platform: [linux, macos]
         run: |
           mkdir -p home
           HOME="$(pwd)/home" ./bin/logosctl --config-dir ./session daemon start --detach
+        code_block: "logosctl --config-dir ./session daemon start --detach"
+      - title: "Start a logosctl daemon to download with"
+        platform: windows
+        text: |
+          The same command. `logosctl` is a native Windows program, so `HOME`
+          is given in Windows form; the storage module reads it before
+          `USERPROFILE`.
+        run: |
+          mkdir -p home
+          HOME="$(cygpath -m "$PWD")/home" ./bin/logosctl --config-dir ./session daemon start --detach
         code_block: "logosctl --config-dir ./session daemon start --detach"
 
   - title: "Populate a user directory from the catalog"
@@ -79,13 +125,31 @@ sections:
       `lgpm` decides where each package lands purely from its manifest `type`:
       `core` modules go to `--modules-dir`, `ui_qml` plugins to
       `--ui-plugins-dir`. Basecamp reads both from the user directory at
-      startup.
+      startup. On Windows, the packages that publish no Windows variant are
+      skipped and named.
     steps:
       - title: "Install everything the set pins"
+        platform: [linux, macos]
         run: |
           mkdir -p testdata/modules testdata/plugins
           MODULES_DIR=./testdata/modules PLUGINS_DIR=./testdata/plugins \
             "$RELEASE_SET_DIR/doctests/release-set.sh" install-all
+        code_block: |
+          logosctl --config-dir ./session package download <each> --version <pinned> -o packages
+          lgpm --modules-dir ./testdata/modules --ui-plugins-dir ./testdata/plugins \
+               install --file packages/<each>.lgx
+        expect_contains:
+          - "sha256 OK"
+      - title: "Install everything that publishes a Windows variant"
+        platform: windows
+        text: |
+          The same two commands per package. With no lock on Windows, the helper
+          takes each expected `sha256`, and whether a Windows variant exists,
+          from the catalog index the resolver reads.
+        run: |
+          mkdir -p testdata/modules testdata/plugins
+          MODULES_DIR=./testdata/modules PLUGINS_DIR=./testdata/plugins \
+            bash release-set/windows.sh install-all
         code_block: |
           logosctl --config-dir ./session package download <each> --version <pinned> -o packages
           lgpm --modules-dir ./testdata/modules --ui-plugins-dir ./testdata/plugins \
@@ -113,9 +177,11 @@ sections:
     step: true
     text: |
       The release asset itself: an AppImage on Linux (extracted rather than
-      mounted — CI runners have no FUSE), a `.dmg` on macOS.
+      mounted — CI runners have no FUSE), a `.dmg` on macOS, and on Windows the
+      installer, run the way a user would get Basecamp onto the machine.
     steps:
       - title: "Fetch Basecamp"
+        platform: [linux, macos]
         run: '"$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-basecamp LogosBasecamp'
         code_block: "./doctests/release-set.sh fetch logos-basecamp LogosBasecamp"
         check_file: "bin/LogosBasecamp"
@@ -123,6 +189,22 @@ sections:
           If the pinned release publishes no artifact for this platform the step
           reports `SKIP:` and the spec is skipped rather than failed — the
           release description then lists the platform as not validated.
+      - title: "Install Basecamp"
+        platform: windows
+        text: |
+          The pinned release's `setup.exe` is staged as `basecamp-setup/`. `/S`
+          installs silently for the current user, with no elevation, into the
+          folder `/D=` names: here, one inside this run. A silent install takes
+          the installer's *install* mode, so it also adds the Start Menu and
+          desktop shortcuts and registers an uninstaller. Anything an existing
+          Basecamp installation has registered there is saved first. The
+          helper then checks the registered version is the pinned one.
+        run: "bash release-set/windows.sh basecamp-install basecamp-install"
+        code_block: |
+          LogosBasecamp-Desktop-<version>-x86_64-setup.exe /S /D=<install folder>
+        check_file: "basecamp-install/bin/LogosBasecamp.exe"
+        expect_contains:
+          - "the pinned release"
 
   - title: "Launch it headless and watch it"
     step: true
@@ -132,6 +214,7 @@ sections:
       boot, load its plugins, and settle.
     steps:
       - title: "Launch"
+        platform: [linux, macos]
         text: |
           Launched through its real path rather than the `./bin` symlink:
           Basecamp locates its embedded modules and plugins relative to its own
@@ -147,7 +230,30 @@ sections:
         code_block: |
           QT_QPA_PLATFORM=offscreen LogosBasecamp --user-dir ./testdata > basecamp.log &
 
+      - title: "Launch"
+        platform: windows
+        text: |
+          The installed copy, from its `bin/`. Two settings differ from the
+          other platforms. `QT_FORCE_STDERR_LOGGING=1` sends Qt's messages to
+          the log file: a GUI program with no console otherwise writes them
+          to the Windows debugger. `LOGOS_NO_SCHEME_REGISTER=1` stops it taking
+          over the `basecamp://` handler, which a Basecamp already installed
+          for this user owns. Its `HOME` and `USERPROFILE` stay inside this
+          run.
+        run: |
+          mkdir -p app-home
+          HOME="$(cygpath -m "$PWD")/app-home" USERPROFILE="$(cygpath -w "$PWD")\\app-home" \
+          QT_QPA_PLATFORM=offscreen QT_FORCE_STDERR_LOGGING=1 LOGOS_NO_SCHEME_REGISTER=1 \
+            ./basecamp-install/bin/LogosBasecamp.exe --user-dir "$PWD/testdata" \
+            > basecamp.log 2>&1 &
+          echo $! > basecamp.pid
+          sleep 45
+        code_block: |
+          set QT_QPA_PLATFORM=offscreen
+          "<install folder>\bin\LogosBasecamp.exe" --user-dir .\testdata > basecamp.log
+
       - title: "Check it is still alive and clean"
+        platform: [linux, macos]
         text: |
           Three assertions: the process survived the boot, the QML engine did not
           fail to load a component, and no plugin failed to load. A shipping
@@ -195,3 +301,65 @@ sections:
           The shipped artifact boots on a user directory built entirely from this
           release set. For assertions about what the UI actually *shows*, see
           [`basecamp-ui`](basecamp-ui.md) — same commit, inspector enabled.
+      - title: "Check it is still alive and clean"
+        platform: windows
+        text: |
+          The same three assertions. Git Bash's `kill` would end only the one
+          process, so the helper stops the whole tree with `taskkill /T`: the
+          `logos_host.exe` processes it started go too, which the uninstall
+          after this needs.
+        run: |
+          set +e
+          pid="$(cat basecamp.pid)"
+          failed=0
+
+          if bash release-set/windows.sh alive "$pid"; then
+            echo "process alive after boot"
+          else
+            echo "FAIL: process exited during boot"; failed=1
+          fi
+
+          for pattern in \
+            "QQmlApplicationEngine failed" \
+            "Cannot load library" \
+            "is not a type" \
+            "Failed to load plugin"
+          do
+            if grep -qF "$pattern" basecamp.log; then
+              echo "FAIL: log contains: $pattern"
+              grep -F "$pattern" basecamp.log | head -3
+              failed=1
+            fi
+          done
+
+          bash release-set/windows.sh stop "$pid"
+          sleep 3
+
+          echo "--- last 20 log lines ---"
+          tail -20 basecamp.log
+
+          if [ "$failed" -eq 0 ]; then echo "smoke OK"; else echo "smoke FAILED"; fi
+          exit "$failed"
+        code_block: |
+          tasklist /FI "PID eq <pid>"                  # still running?
+          findstr /C:"Cannot load library" basecamp.log   # nothing failed to load?
+        expect_contains:
+          - "process alive after boot"
+          - "smoke OK"
+
+  - title: "Uninstall it"
+    step: true
+    platform: windows
+    text: |
+      The installer's other half. Run in place with `_?=`, the uninstaller
+      waits until it is done, and cannot delete itself or its folder; it has to
+      remove everything else, including the registry keys the install wrote.
+      Whatever an existing installation had registered is then put back.
+    steps:
+      - title: "Uninstall Basecamp"
+        run: "bash release-set/windows.sh basecamp-uninstall basecamp-install"
+        code_block: |
+          "<install folder>\Uninstall.exe" /S
+        expect_contains:
+          - "removed the installed tree"
+          - "removed its registry keys"
