@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tutorial Execution Report</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --pass: #2ea043; --fail: #f85149; --info: #d29922;
+    --code-bg: #0b0f14;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--panel);
+    border-bottom: 1px solid var(--border); padding: 12px 20px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .pill { padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.pass { background: rgba(46,160,67,.15); color: var(--pass); }
+  .pill.fail { background: rgba(248,81,73,.15); color: var(--fail); }
+  .pill.skip { background: rgba(210,153,34,.15); color: var(--info); }
+  select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  main { max-width: 1600px; margin: 0 auto; padding: 16px; }
+  .tutorial-title { font-size: 20px; font-weight: 700; margin: 24px 0 8px; color: #fff; }
+  .row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+    border: 1px solid var(--border); border-radius: 8px; margin: 10px 0; overflow: hidden;
+  }
+  .row.preamble, .row.section { grid-template-columns: 1fr; }
+  .col { padding: 14px 18px; min-width: 0; }
+  .col.left { border-right: 1px solid var(--border); }
+  .row.preamble .col.left, .row.section .col.left { border-right: none; }
+  .col.right { background: var(--panel); }
+  /* A row containing any failed step is tinted red end-to-end so it's
+     impossible to miss when scanning the report. */
+  .row.has-fail { border-color: var(--fail); box-shadow: 0 0 0 1px var(--fail); }
+  .row.has-fail .col.left { background: rgba(248,81,73,.07); border-right-color: var(--fail); }
+  .row.has-fail .col.right { background: rgba(248,81,73,.12); }
+  .col-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
+  .md :first-child { margin-top: 0; }
+  .md h1 { font-size: 22px; } .md h2 { font-size: 18px; } .md h3 { font-size: 15px; }
+  .md pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; }
+  .md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .md :not(pre) > code { background: rgba(110,118,129,.2); padding: .15em .4em; border-radius: 4px; }
+  .md table { border-collapse: collapse; margin: 8px 0; }
+  .md th, .md td { border: 1px solid var(--border); padding: 5px 10px; }
+  .md blockquote { border-left: 3px solid var(--border); margin: 8px 0; padding: 2px 12px; color: var(--muted); }
+  .md img { width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; }
+  .exec { margin-bottom: 14px; }
+  .exec:last-child { margin-bottom: 0; }
+  .exec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .badge { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 4px; }
+  .badge.pass { background: rgba(46,160,67,.15); color: var(--pass); }
+  .badge.fail { background: rgba(248,81,73,.15); color: var(--fail); }
+  .badge.info { background: rgba(210,153,34,.15); color: var(--info); }
+  .badge.not_run { background: var(--bg); color: var(--muted); white-space: nowrap; }
+  .badge.running { background: rgba(248,81,73,.15); color: var(--fail); }
+  .ui-actions { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+  .ui-actions td { padding: 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .ui-actions td:last-child { white-space: nowrap; color: var(--muted); }
+  .kind { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .note { color: var(--muted); font-size: 12.5px; margin-bottom: 6px; }
+  pre.cmd { background: var(--code-bg); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: 10px 12px; margin: 0 0 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+  pre.output { background: #010409; border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 0; overflow-x: auto; max-height: 360px; overflow-y: auto; color: #b9c1ca; }
+  pre.cmd, pre.output { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45; }
+  .empty { color: var(--muted); font-style: italic; font-size: 12.5px; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 12px; margin-bottom: 4px; }
+  /* GitHub-style permalinks: every heading carries a link icon in the left
+     gutter (revealed on hover/focus) that copies a deep link to that section.
+     scroll-margin-top keeps the target clear of the sticky header. */
+  .heading-anchored { position: relative; scroll-margin-top: 76px; }
+  a.anchor {
+    position: absolute; left: -18px; top: 0; width: 16px; height: 1.55em;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--muted); opacity: 0; text-decoration: none;
+    transition: opacity .1s ease-in;
+  }
+  a.anchor svg { width: 14px; height: 14px; display: block; }
+  .heading-anchored:hover > a.anchor, a.anchor:focus { opacity: 1; }
+  a.anchor:hover { color: var(--accent); }
+  .heading-anchored.flash { animation: flash 1.4s ease-out; border-radius: 4px; }
+  @keyframes flash {
+    from { background: rgba(88,166,255,.28); box-shadow: 0 0 0 4px rgba(88,166,255,.28); }
+    to { background: transparent; box-shadow: 0 0 0 4px transparent; }
+  }
+  #toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 7px 14px; font-size: 12.5px; z-index: 20;
+    opacity: 0; pointer-events: none; transition: opacity .15s ease-in-out;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tutorial Execution Report</h1>
+  <span id="summary"></span>
+  <label style="margin-left:auto; font-size:12px; color:var(--muted)">Tutorial
+    <select id="picker"></select>
+  </label>
+</header>
+<main id="main"></main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script id="report-data" type="application/json">{"generated_platform": "Darwin", "summary": {"failed": 0, "passed": 9, "skipped": 8}, "tutorials": [{"meta": {"name": "Smoke-testing the shipped Basecamp artifact", "platform": "Darwin (ext=dylib)", "release": "(none)"}, "rows": [{"execs": [], "md": "# Smoke-testing the shipped Basecamp artifact\n\nThis doc-test runs **the artifact a user actually downloads** \u2014 the Basecamp\nAppImage (Linux), `.dmg` (macOS) or installer (Windows) attached to the\nrelease the release set pins \u2014 against a user directory populated with every\nmodule and UI app in the set, downloaded from the catalog with `logosctl` and\ninstalled with `lgpm`.\n\nOn Windows the artifact is an installer, so that leg also installs Basecamp\nsilently, launches the installed copy and uninstalls it again. Nix does not\nrun there: CI stages the pinned installer and the `logosctl` and `lgpm`\nrelease zips on Linux, then runs the steps marked for Windows on\n`windows-latest`, installing only the packages that publish a Windows\nvariant.\n\nIt is deliberately a *smoke* test. Shipping builds have the QML inspector\ncompiled out (it is a test-only feature, off in every release artifact), so\nnothing can drive their UI. What this proves is still worth proving: the\nshipped binary starts on a real user-dir full of pinned modules, stays up, and\nreports no plugin or QML load failures.\n\nThe companion spec, [`basecamp-ui`](basecamp-ui.md), drives the UI properly by\nrebuilding the *same pinned commit* with the inspector enabled.\n\n**What you'll build:** The shipped Basecamp artifact, launched headless against a user directory holding every module and UI app in the release set.\n\n**What you'll learn:**\n\n- How to populate a Basecamp `--user-dir` from the module catalog\n- Why core modules and UI plugins land in different directories\n- How to smoke-test a shipping artifact that cannot be driven by a test harness\n- What \"the inspector is off in release builds\" means for what is testable\n\n## Prerequisites\n\n- **A Linux or macOS machine** (linux-x86_64, linux-arm64 or macos-arm64), or the Windows leg's staged tree.\n- **On Windows:** `basecamp-setup/`, `logosctl/`, `lgpm/` and `release-set/` staged by logos-windows-ci, plus Git Bash. A Basecamp already installed for the same user keeps its registration: the leg saves it before installing and restores it after uninstalling.\n- **On Linux:** the usual desktop graphics libraries (`libopengl0`, `libgl1`, `libegl1`). The portable bundle loads them from the host, exactly as it would on a real desktop.\n- **`RELEASE_SET_DIR`** pointing at the `logos-release-set` checkout, and **`GITHUB_TOKEN`** set (resolving the set hits the GitHub API)."}, {"execs": [], "md": "## Step 1: Resolve the release set\n\nThe resolver turns the pinned tags and versions into\n`release-set.lock.json` \u2014 repository URL, commit, download URL and checksum\nfor every artifact."}, {"execs": [{"cmd": "\"$RELEASE_SET_DIR/doctests/release-set.sh\" lock", "exit_code": 0, "kind": "run", "note": "", "output": "==> reusing pre-resolved /Users/runner/work/logos-release-set/logos-release-set/release-set.lock.json\nrelease set 0.3.0-r.2+de4870c  (logos-co/logos-modules-release)\n  logos-basecamp               0.3.2        f2fae63073\n  logos-logoscore-cli          0.3.2        ca70bcdd9f\n  logos-package-manager        0.3.1        1d16007a7e\n  logos-module-builder         0.3.3        3a64943fe6\n  blockchain_module            0.3.0        7952ba0cc9\n  chat_module                  0.3.0        5053dd5062\n  delivery_module              0.3.2        c25b786809\n  lez_core                     0.5.0        b89e5d24df\n  lez_indexer_module           1.2.0        b27f3ee7a6\n  liblogos_lez_rln_module      4.2.1        eb02da8f0c\n  liblogos_rln_module          0.10.0       eb02da8f0c\n  libp2p_module                1.1.0        49f77430fb\n  openmetrics                  0.1.2        802012aabb\n  storage_module               3.0.2        7548f41ae1\n  blockchain_ui                0.3.1        1aaa64aa7d\n  chat_ui                      0.3.0        15c16ca4ad\n  lez_explorer_ui              1.2.0        69b7120baf\n  lez_wallet_ui                1.2.0        961cc324e8\n  storage_ui                   3.0.2        7b89afee45\n", "status": "pass"}], "md": "### 1.1 Resolve\n\n```bash\n./doctests/release-set.sh lock\n```"}, {"execs": [], "md": "### 1.2 Read the pins\n\nWindows resolves nothing. CI read the lock on Linux to stage the\npinned installer and tools, and staged `release-set.json` with a\nhelper that reads it.\n\n```bash\nbash release-set/windows.sh pins\n```"}, {"execs": [], "md": "## Step 2: Fetch the package tools\n\n`logosctl` and `lgpm` at the tags the release set pins: `logosctl`\ndownloads each package from the catalog, and `lgpm` installs it into\nBasecamp's user directory, which `logosctl` does not write to."}, {"execs": [{"cmd": "\"$RELEASE_SET_DIR/doctests/release-set.sh\" fetch logos-logoscore-cli logosctl\n\"$RELEASE_SET_DIR/doctests/release-set.sh\" fetch logos-package-manager lgpm\n", "exit_code": 0, "kind": "run", "note": "", "output": "==> logos-logoscore-cli (macos-arm64): logosctl-aarch64-macos.tar.gz\n    -> /private/tmp/doctest-test-35phmx8i/bin/logosctl (bundle: logosctl-aarch64-macos/bin/logosctl)\n==> logos-package-manager (macos-arm64): lgpm-aarch64-macos.tar.gz\n    -> /private/tmp/doctest-test-35phmx8i/bin/lgpm (bundle: lgpm-aarch64-macos/bin/lgpm)\n", "status": "pass"}], "md": "### 2.1 Fetch logosctl and lgpm\n\n```bash\n./doctests/release-set.sh fetch logos-logoscore-cli logosctl\n./doctests/release-set.sh fetch logos-package-manager lgpm\n```"}, {"execs": [], "md": "### 2.2 Use the staged releases\n\nOn Windows the pinned releases' `logosctl-x86_64-windows.zip` and\n`lgpm-x86_64-windows.zip` are already here, unpacked as `logosctl/`\nand `lgpm/`. The helper writes the same `./bin/` wrappers as `fetch`\ndoes elsewhere.\n\n```bash\nbash release-set/windows.sh link logosctl\nbash release-set/windows.sh link lgpm\n```"}, {"execs": [{"cmd": "mkdir -p home\nHOME=\"$(pwd)/home\" ./bin/logosctl --config-dir ./session daemon start --detach\n", "exit_code": 0, "kind": "run", "note": "", "output": "Daemon started (pid 5184)\nLogs: /private/tmp/doctest-test-35phmx8i/./session/logs/daemon.log\n", "status": "pass"}], "md": "### 2.3 Start a logosctl daemon to download with\n\nDownloads are served by the `package_downloader` module inside the\ndaemon, so it starts first, in a session of its own. Its `HOME` is\ninside this run's directory, because the package downloader also\nstarts a storage node, whose default data directory is\n`~/.logos_storage`.\n\n```bash\nlogosctl --config-dir ./session daemon start --detach\n```"}, {"execs": [], "md": "### 2.4 Start a logosctl daemon to download with\n\nThe same command. `logosctl` is a native Windows program, so `HOME`\nis given in Windows form; the storage module reads it before\n`USERPROFILE`.\n\n```bash\nlogosctl --config-dir ./session daemon start --detach\n```"}, {"execs": [], "md": "## Step 3: Populate a user directory from the catalog\n\nEvery module and UI app in the release set, downloaded at its pinned\nversion, checksum-verified, and installed into one `--user-dir` tree.\n\n`lgpm` decides where each package lands purely from its manifest `type`:\n`core` modules go to `--modules-dir`, `ui_qml` plugins to\n`--ui-plugins-dir`. Basecamp reads both from the user directory at\nstartup. On Windows, the packages that publish no Windows variant are\nskipped and named."}, {"execs": [{"cmd": "mkdir -p testdata/modules testdata/plugins\nMODULES_DIR=./testdata/modules PLUGINS_DIR=./testdata/plugins \\\n  \"$RELEASE_SET_DIR/doctests/release-set.sh\" install-all\n", "exit_code": 0, "kind": "run", "note": "", "output": "==> logosctl package download blockchain_module --version 0.3.0\n    sha256 OK (dabac353fb91\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/blockchain_module-0.3.0.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/blockchain_module-0.3.0.lgx\n done\nInstalled to: ./testdata/modules\n==> logosctl package download chat_module --version 0.3.0\n    sha256 OK (4bf1b4ce8067\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/chat_module-0.3.0.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/chat_module-0.3.0.lgx\n done\nInstalled to: ./testdata/modules\n==> logosctl package download delivery_module --version 0.3.2\n    sha256 OK (9b856418fcf8\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/delivery_module-0.3.2.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/delivery_module-0.3.2.lgx\n done\nInstalled to: ./testdata/modules\n==> logosctl package download lez_core --version 0.5.0\n    sha256 OK (5cb561e27342\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/lez_core-0.5.0.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/lez_core-0.5.0.lgx\n done\nInstalled to: ./testdata/modules\n==> logosctl package download lez_indexer_module --version 1.2.0\n    sha256 OK (1dfd4903ab3a\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/lez_indexer_module-1.2.0.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/lez_indexer_module-1.2.0.lgx\n done\nInstalled to: ./testdata/modules\n==> logosctl package download liblogos_lez_rln_module --version 4.2.1\n    sha256 OK (4d61669f7337\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/liblogos_lez_rln_module-4.2.1.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/liblogos_lez_rln_module-4.2.1.lgx\n done\nInstalled to: ./testdata/modules\n==> logosctl package download liblogos_rln_module --version 0.10.0\n    sha256 OK (5dd755bc1b09\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/liblogos_rln_module-0.10.0.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/liblogos_rln_module-0.10.0.lgx\n done\nInstalled to: ./testdata/modules\n==> logosctl package download libp2p_module --version 1.1.0\n    sha256 OK (28f296e1f4cd\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/libp2p_module-1.1.0.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/libp2p_module-1.1.0.lgx\n done\nInstalled to: ./testdata/modules\n==> logosctl package download openmetrics --version 0.1.2\n    sha256 OK (b90daadf4d34\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/openmetrics-0.1.2.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/openmetrics-0.1.2.lgx\n done\nInstalled to: ./testdata/modules\n==> logosctl package download storage_module --version 3.0.2\n    sha256 OK (49accbb8e538\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/storage_module-3.0.2.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/storage_module-3.0.2.lgx\n done\nInstalled to: ./testdata/modules\n==> logosctl package download blockchain_ui --version 0.3.1\n    sha256 OK (139cfa2a1fc8\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/blockchain_ui-0.3.1.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/blockchain_ui-0.3.1.lgx\n done\nInstalled to: ./testdata/plugins\n==> logosctl package download chat_ui --version 0.3.0\n    sha256 OK (af3a8b494107\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/chat_ui-0.3.0.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/chat_ui-0.3.0.lgx\n done\nInstalled to: ./testdata/plugins\n==> logosctl package download lez_explorer_ui --version 1.2.0\n    sha256 OK (742a0bc0c1b2\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/lez_explorer_ui-1.2.0.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/lez_explorer_ui-1.2.0.lgx\n done\nInstalled to: ./testdata/plugins\n==> logosctl package download lez_wallet_ui --version 1.2.0\n    sha256 OK (afae9dec6f57\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/lez_wallet_ui-1.2.0.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/lez_wallet_ui-1.2.0.lgx\n done\nInstalled to: ./testdata/plugins\n==> logosctl package download storage_ui --version 3.0.2\n    sha256 OK (3adbed3020e0\u2026)\nInstalling from file: /private/tmp/doctest-test-35phmx8i/packages/storage_ui-3.0.2.lgx...Warning: Package is unsigned: /private/tmp/doctest-test-35phmx8i/packages/storage_ui-3.0.2.lgx\n done\nInstalled to: ./testdata/plugins\n", "status": "pass"}], "md": "### 3.1 Install everything the set pins\n\n```bash\nlogosctl --config-dir ./session package download <each> --version <pinned> -o packages\nlgpm --modules-dir ./testdata/modules --ui-plugins-dir ./testdata/plugins \\\n     install --file packages/<each>.lgx\n```"}, {"execs": [], "md": "### 3.2 Install everything that publishes a Windows variant\n\nThe same two commands per package. With no lock on Windows, the helper\ntakes each expected `sha256`, and whether a Windows variant exists,\nfrom the catalog index the resolver reads.\n\n```bash\nlogosctl --config-dir ./session package download <each> --version <pinned> -o packages\nlgpm --modules-dir ./testdata/modules --ui-plugins-dir ./testdata/plugins \\\n     install --file packages/<each>.lgx\n```"}, {"execs": [{"cmd": "echo \"--- core modules ---\"; ls testdata/modules\necho \"--- ui plugins ---\";   ls testdata/plugins\n", "exit_code": 0, "kind": "run", "note": "", "output": "--- core modules ---\nblockchain_module\nchat_module\ndelivery_module\nlez_core\nlez_indexer_module\nliblogos_lez_rln_module\nliblogos_rln_module\nlibp2p_module\nopenmetrics\nstorage_module\n--- ui plugins ---\nblockchain_ui\nchat_ui\nlez_explorer_ui\nlez_wallet_ui\nstorage_ui\n", "status": "pass"}], "md": "### 3.3 See what landed where\n\n```bash\nls testdata/modules\nls testdata/plugins\n```"}, {"execs": [{"cmd": "trap '' TERM\n./bin/logosctl --config-dir ./session daemon stop || true\ntrue\n", "exit_code": 0, "kind": "run", "note": "", "output": "{\"message\":\"Daemon shutting down.\",\"status\":\"ok\"}\n", "status": "pass"}], "md": "### 3.4 Stop the download daemon\n\n```bash\nlogosctl --config-dir ./session daemon stop\n```"}, {"execs": [], "md": "## Step 4: Fetch the shipped Basecamp artifact\n\nThe release asset itself: an AppImage on Linux (extracted rather than\nmounted \u2014 CI runners have no FUSE), a `.dmg` on macOS, and on Windows the\ninstaller, run the way a user would get Basecamp onto the machine."}, {"execs": [{"cmd": "\"$RELEASE_SET_DIR/doctests/release-set.sh\" fetch logos-basecamp LogosBasecamp", "exit_code": 0, "kind": "run", "note": "", "output": "==> logos-basecamp (macos-arm64): LogosBasecamp-Desktop-v0.3.2-f2fae6-aarch64.dmg\n    -> /private/tmp/doctest-test-35phmx8i/bin/LogosBasecamp (bundle: LogosBasecamp.app/Contents/MacOS/LogosBasecamp)\n", "status": "pass"}], "md": "### 4.1 Fetch Basecamp\n\n```bash\n./doctests/release-set.sh fetch logos-basecamp LogosBasecamp\n```\n\nIf the pinned release publishes no artifact for this platform the step\nreports `SKIP:` and the spec is skipped rather than failed \u2014 the\nrelease description then lists the platform as not validated."}, {"execs": [], "md": "### 4.2 Install Basecamp\n\nThe pinned release's `setup.exe` is staged as `basecamp-setup/`. `/S`\ninstalls silently for the current user, with no elevation, into the\nfolder `/D=` names: here, one inside this run. A silent install takes\nthe installer's *install* mode, so it also adds the Start Menu and\ndesktop shortcuts and registers an uninstaller. Anything an existing\nBasecamp installation has registered there is saved first. The\nhelper then checks the registered version is the pinned one.\n\n```bash\nLogosBasecamp-Desktop-<version>-x86_64-setup.exe /S /D=<install folder>\n```"}, {"execs": [], "md": "## Step 5: Launch it headless and watch it\n\n`QT_QPA_PLATFORM=offscreen` renders to an offscreen buffer, so no display\nis needed. The app gets the populated user directory and 45 seconds to\nboot, load its plugins, and settle."}, {"execs": [{"cmd": "APP=\"$(\"$RELEASE_SET_DIR/doctests/release-set.sh\" path LogosBasecamp)\"\necho \"launching $APP\"\nQT_QPA_PLATFORM=offscreen \"$APP\" --user-dir ./testdata \\\n  > basecamp.log 2>&1 &\necho $! > basecamp.pid\nsleep 45\n", "exit_code": 0, "kind": "run", "note": "", "output": "launching /private/tmp/doctest-test-35phmx8i/.fetch/logos-basecamp/LogosBasecamp.app/Contents/MacOS/LogosBasecamp\n", "status": "pass"}], "md": "### 5.1 Launch\n\nLaunched through its real path rather than the `./bin` symlink:\nBasecamp locates its embedded modules and plugins relative to its own\nexecutable, and on macOS that resolution follows the invocation path,\nso a symlinked launch would look for them beside the symlink.\n\n```bash\nQT_QPA_PLATFORM=offscreen LogosBasecamp --user-dir ./testdata > basecamp.log &\n```"}, {"execs": [], "md": "### 5.2 Launch\n\nThe installed copy, from its `bin/`. Two settings differ from the\nother platforms. `QT_FORCE_STDERR_LOGGING=1` sends Qt's messages to\nthe log file: a GUI program with no console otherwise writes them\nto the Windows debugger. `LOGOS_NO_SCHEME_REGISTER=1` stops it taking\nover the `basecamp://` handler, which a Basecamp already installed\nfor this user owns. Its `HOME` and `USERPROFILE` stay inside this\nrun.\n\n```bash\nset QT_QPA_PLATFORM=offscreen\n\"<install folder>\\bin\\LogosBasecamp.exe\" --user-dir .\\testdata > basecamp.log\n```"}, {"execs": [{"cmd": "set +e\npid=\"$(cat basecamp.pid)\"\nfailed=0\n\nif kill -0 \"$pid\" 2>/dev/null; then\n  echo \"process alive after boot\"\nelse\n  echo \"FAIL: process exited during boot\"; failed=1\nfi\n\nfor pattern in \\\n  \"QQmlApplicationEngine failed\" \\\n  \"Cannot load library\" \\\n  \"is not a type\" \\\n  \"Failed to load plugin\"\ndo\n  if grep -qF \"$pattern\" basecamp.log; then\n    echo \"FAIL: log contains: $pattern\"\n    grep -F \"$pattern\" basecamp.log | head -3\n    failed=1\n  fi\ndone\n\nkill \"$pid\" 2>/dev/null || true\nsleep 2\n\necho \"--- last 20 log lines ---\"\ntail -20 basecamp.log\n\nif [ \"$failed\" -eq 0 ]; then echo \"smoke OK\"; else echo \"smoke FAILED\"; fi\nexit \"$failed\"\n", "exit_code": 0, "kind": "run", "note": "", "output": "process alive after boot\n--- last 20 log lines ---\nThis plugin does not support raise()\n[2026-10-06 21:32:18.967] [warning] [logos] [capability_module] Warning: QObject::connect: No such signal ::eventResponse(QString,QVariantList)\n[2026-10-06 21:32:18.970] [warning] [logos] [capability_module] Warning: QObject::connect: No such signal ::eventResponse(QString,QVariantList)\n[2026-10-06 21:32:18.973] [info] [logos] [storage_module] StorageModuleImpl::init called\n[2026-10-06 21:32:19.046] [out] [storage_module] INF 2026-10-06 21:32:19.046+00:00 Creating a private key and saving it       tid=42381\n[2026-10-06 21:32:19.047] [out] [storage_module] INF 2026-10-06 21:32:19.047+00:00 Bootstrapping node using a predefined network topics=\"libstorage libstoragelifecycle\" tid=42381 network=\"[logos.test]: Logos testnet\"\n[2026-10-06 21:32:19.049] [out] [storage_module] INF 2026-10-06 21:32:19.048+00:00 AutoNAT client enabled                     topics=\"libstorage libstoragelifecycle\" tid=42381 scheduleInterval=1m numPeersToAsk=3 maxQueueSize=3 minConfidence=0.6\n[2026-10-06 21:32:19.051] [out] [storage_module] INF 2026-10-06 21:32:19.051+00:00 Threadpool started                         topics=\"libstorage libstoragelifecycle\" tid=42381 numThreads=3\n[2026-10-06 21:32:19.057] [info] [logos] [storage_module] StorageModuleImpl::start called\n[2026-10-06 21:32:19.059] [out] [storage_module] WRN 2026-10-06 21:32:19.059+00:00 No key for a QueryResponse                 topics=\"storage repostore\" tid=42381\n[2026-10-06 21:32:19.066] [out] [storage_module] INF 2026-10-06 21:32:19.066+00:00 Starting node with Mix relay pool          topics=\"storage node\" tid=42381 count=4\n[2026-10-06 21:32:19.067] [out] [storage_module] WRN 2026-10-06 21:32:19.067+00:00 No Mix-compatible address among announced addrs topics=\"storage discovery\" tid=42381 addrs=[]\n[2026-10-06 21:32:19.067] [out] [storage_module] INF 2026-10-06 21:32:19.067+00:00 Mix local address updated                  topics=\"storage discovery\" tid=42381 address=/ip4/0.0.0.0/tcp/0\n[2026-10-06 21:32:19.067] [out] [storage_module] NTC 2026-10-06 21:32:19.067+00:00 Started Storage node                       topics=\"storage node\" tid=42381 id=16U*wrY1dt addrs=[]\n[2026-10-06 21:32:50.826] [out] [storage_module] WRN 2026-10-06 21:32:50.826+00:00 TCP port mapping failed                    topics=\"nat\" tid=42381 msg=\"plum: mapping 0 failed\"\n[2026-10-06 21:32:51.625] [out] [storage_module] INF 2026-10-06 21:32:51.625+00:00 Mix local address updated                  topics=\"storage discovery\" tid=42381 address=/ip4/129.212.221.44/tcp/8070/p2p/16Uiu2HAmVFXLh9fs5mExDDwzsah2rWdiHR2Fy3cPmF5xPx29vrbB/p2p-circuit\n[2026-10-06 21:32:51.626] [out] [storage_module] INF 2026-10-06 21:32:51.625+00:00 Signed peer record updated                 topics=\"storage node\" tid=42381 addrs=\"[/ip4/129.212.221.44/tcp/8070/p2p/16Uiu2HAmVFXLh9fs5mExDDwzsah2rWdiHR2Fy3cPmF5xPx29vrbB/p2p-circuit, /ip4/129.212.221.44/tcp/8070/mix-transport/A_aTx0w5sTTjM1GEgYYDd1cbzpzGQZ8eiqL77znxAunKouXQ3WVLH-5B4g_222ZrPRKBRi-10dcrPmrbrQPMHQI=/p2p/16Uiu2HAmVFXLh9fs5mExDDwzsah2rWdiHR2Fy3cPmF5xPx29vrbB/p2p-circuit]\" spr=spr:CiUIAhIhA-3djaCvD5WCTLjRY0-Ct3IC0eCu8py_aHKqys8uBYODEgIDARrlAQonACUIAhIhA-3djaCvD5WCTLjRY0-Ct3IC0eCu8py_aHKqys8uBYODEIPSldYGGjYKNASB1N0sBh-GpQMnACUIAhIhA_aTx0w5sTTjM1GEgYYDd1cbzpzGQZ8eiqL77znxAunKogIafAp6BIHU3SwGH4aBgMABQQP2k8dMObE04zNRhIGGA3dXG86cxkGfHoqi--858QLpyqLl0N1lSx_uQeIP9ttmaz0SgUYvtdHXKz5q260DzB0CpQMnACUIAhIhA_aTx0w5sTTjM1GEgYYDd1cbzpzGQZ8eiqL77znxAunKogIqRzBFAiEAjt1Ne_GrfmEjHVXKUGY_60CDfR8uQHwFa9OoaAI4Z9MCICinFHIvlxC98KoJIadLzedsPwTqHBr4gw9EMH6Bi_0K\n[2026-10-06 21:32:51.629] [out] [storage_module] INF 2026-10-06 21:32:51.629+00:00 Mix local address updated                  topics=\"storage discovery\" tid=42381 address=/ip4/178.128.140.206/tcp/8070/p2p/16Uiu2HAm3xPbYz2zsq5XVGDCMqKhhNXZWyYV6WLVv3yzzUiRJWnW/p2p-circuit\n[2026-10-06 21:32:51.629] [out] [storage_module] INF 2026-10-06 21:32:51.629+00:00 Signed peer record updated                 topics=\"storage node\" tid=42381 addrs=\"[/ip4/178.128.140.206/tcp/8070/p2p/16Uiu2HAm3xPbYz2zsq5XVGDCMqKhhNXZWyYV6WLVv3yzzUiRJWnW/p2p-circuit, /ip4/178.128.140.206/tcp/8070/mix-transport/An67-cPFkDpqyeTEjDPbhtN8NUxt9S-niBc5QRLyc2xrfadHgJmHjhbhrmTY2S86xaAz0wkgJnLzjEsjWAApyTU=/p2p/16Uiu2HAm3xPbYz2zsq5XVGDCMqKhhNXZWyYV6WLVv3yzzUiRJWnW/p2p-circuit, /ip4/129.212.221.44/tcp/8070/p2p/16Uiu2HAmVFXLh9fs5mExDDwzsah2rWdiHR2Fy3cPmF5xPx29vrbB/p2p-circuit, /ip4/129.212.221.44/tcp/8070/mix-transport/A_aTx0w5sTTjM1GEgYYDd1cbzpzGQZ8eiqL77znxAunKouXQ3WVLH-5B4g_222ZrPRKBRi-10dcrPmrbrQPMHQI=/p2p/16Uiu2HAmVFXLh9fs5mExDDwzsah2rWdiHR2Fy3cPmF5xPx29vrbB/p2p-circuit, /ip4/129.212.221.44/tcp/8070/p2p/16Uiu2HAmVFXLh9fs5mExDDwzsah2rWdiHR2Fy3cPmF5xPx29vrbB/p2p-circuit/mix-transport/A-3djaCvD5WCTLjRY0-Ct3IC0eCu8py_aHKqys8uBYODAAyyAHSQ1IrhjH3DzFAybQD-B1dKIQ_0SbHiiTp78iQ=]\" spr=spr:CiUIAhIhA-3djaCvD5WCTLjRY0-Ct3IC0eCu8py_aHKqys8uBYODEgIDARqZBAonACUIAhIhA-3djaCvD5WCTLjRY0-Ct3IC0eCu8py_aHKqys8uBYODEIPSldYGGjYKNASygIzOBh-GpQMnACUIAhIhAn67-cPFkDpqyeTEjDPbhtN8NUxt9S-niBc5QRLyc2xrogIafAp6BLKAjM4GH4aBgMABQQJ-u_nDxZA6asnkxIwz24bTfDVMbfUvp4gXOUES8nNsa32nR4CZh44W4a5k2NkvOsWgM9MJICZy84xLI1gAKck1pQMnACUIAhIhAn67-cPFkDpqyeTEjDPbhtN8NUxt9S-niBc5QRLyc2xrogIaNgo0BIHU3SwGH4alAycAJQgCEiED9pPHTDmxNOMzUYSBhgN3VxvOnMZBnx6KovvvOfEC6cqiAhp8CnoEgdTdLAYfhoGAwAFBA_aTx0w5sTTjM1GEgYYDd1cbzpzGQZ8eiqL77znxAunKouXQ3WVLH-5B4g_222ZrPRKBRi-10dcrPmrbrQPMHQKlAycAJQgCEiED9pPHTDmxNOMzUYSBhgN3VxvOnMZBnx6KovvvOfEC6cqiAhp8CnoEgdTdLAYfhqUDJwAlCAISIQP2k8dMObE04zNRhIGGA3dXG86cxkGfHoqi--858QLpyqICgYDAAUED7d2NoK8PlYJMuNFjT4K3cgLR4K7ynL9ocqrKzy4Fg4MADLIAdJDUiuGMfcPMUDJtAP4HV0ohD_RJseKJOnvyJCpHMEUCIQChSSbZ5PcoxefohA1yhIdt0pkvOZLdAo-JEjFmBaclZQIgUzE2ismLxNw8ABHnCh0ow9iovBdZAXlOBG4CGaEoiWM\nMainContainer destroyed\nsmoke OK\n", "status": "pass"}], "md": "### 5.3 Check it is still alive and clean\n\nThree assertions: the process survived the boot, the QML engine did not\nfail to load a component, and no plugin failed to load. A shipping\nbinary that starts and stays up on a full user-dir is what this spec\nexists to prove.\n\n```bash\nkill -0 \"$(cat basecamp.pid)\"          # still running?\ngrep -F \"Cannot load library\" basecamp.log   # nothing failed to load?\n```\n\nThe shipped artifact boots on a user directory built entirely from this\nrelease set. For assertions about what the UI actually *shows*, see\n[`basecamp-ui`](basecamp-ui.md) \u2014 same commit, inspector enabled."}, {"execs": [], "md": "### 5.4 Check it is still alive and clean\n\nThe same three assertions. Git Bash's `kill` would end only the one\nprocess, so the helper stops the whole tree with `taskkill /T`: the\n`logos_host.exe` processes it started go too, which the uninstall\nafter this needs.\n\n```bash\ntasklist /FI \"PID eq <pid>\"                  # still running?\nfindstr /C:\"Cannot load library\" basecamp.log   # nothing failed to load?\n```"}, {"execs": [], "md": "## Step 6: Uninstall it\n\nThe installer's other half. Run in place with `_?=`, the uninstaller\nwaits until it is done, and cannot delete itself or its folder; it has to\nremove everything else, including the registry keys the install wrote.\nWhatever an existing installation had registered is then put back."}, {"execs": [], "md": "### 6.1 Uninstall Basecamp\n\n```bash\n\"<install folder>\\Uninstall.exe\" /S\n```"}]}], "version": 1}</script>
+<script>
+  const DATA = JSON.parse(document.getElementById("report-data").textContent);
+  if (window.marked) { marked.setOptions({ gfm: true, breaks: false }); }
+  const mdToHtml = (s) => window.marked ? marked.parse(s || "") : ("<pre>" + (s || "") + "</pre>");
+
+  const sum = DATA.summary;
+  document.getElementById("summary").innerHTML =
+    `<span class="pill pass">${sum.passed} passed</span> ` +
+    (sum.failed ? `<span class="pill fail">${sum.failed} failed</span> ` : "") +
+    (sum.skipped ? `<span class="pill skip">${sum.skipped} skipped</span>` : "");
+
+  const picker = document.getElementById("picker");
+  DATA.tutorials.forEach((t, i) => {
+    const o = document.createElement("option");
+    o.value = i; o.textContent = t.meta.name; picker.appendChild(o);
+  });
+
+  function execHtml(e) {
+    const badge = `<span class="badge ${e.status}">${e.status.toUpperCase()}</span>`;
+    const kind = `<span class="kind">${e.kind}${e.platform ? " · " + e.platform : ""}${e.exit_code !== undefined ? " · exit " + e.exit_code : ""}</span>`;
+    let h = `<div class="exec"><div class="exec-head">${badge}${kind}</div>`;
+    if (e.note) h += `<div class="note">${escapeHtml(e.note)}</div>`;
+    if (e.cmd) h += `<pre class="cmd">${escapeHtml(e.cmd)}</pre>`;
+    if (e.runner_cmd) h += `<pre class="cmd">${escapeHtml(e.runner_cmd)}</pre>`;
+    if (e.actions) {
+      const passed = e.actions.filter(a => a.status === "pass").length;
+      h += `<div class="kind">UI actions: ${passed}/${e.actions.length} passed</div>`;
+      h += `<table class="ui-actions"><tbody>`;
+      for (const a of e.actions) {
+        const label = a.status === "not_run" ? "NOT RUN" :
+          a.status === "running" ? "INTERRUPTED" : a.status.toUpperCase();
+        h += `<tr><td>${a.index}</td><td><span class="badge ${a.status}">${label}</span></td>`;
+        h += `<td>${escapeHtml(a.description)}`;
+        if (a.error) h += `<div class="note">${escapeHtml(a.error)}</div>`;
+        h += `</td><td>${a.duration_ms !== undefined ? a.duration_ms + " ms" : ""}</td></tr>`;
+      }
+      h += `</tbody></table>`;
+    }
+    const out = (e.output || "").trim();
+    if (out) {
+      const long = out.split("\n").length > 12;
+      if (long) {
+        h += `<details><summary>output (${out.split("\n").length} lines)</summary><pre class="output">${escapeHtml(out)}</pre></details>`;
+      } else {
+        h += `<pre class="output">${escapeHtml(out)}</pre>`;
+      }
+    }
+    h += `</div>`;
+    return h;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  }
+
+  function render(idx) {
+    const t = DATA.tutorials[idx];
+    const main = document.getElementById("main");
+    main.innerHTML = "";
+    const h = document.createElement("div");
+    h.className = "tutorial-title";
+    h.textContent = t.meta.name + "  —  " + t.meta.platform;
+    main.appendChild(h);
+
+    t.rows.forEach(row => {
+      const isStructural = row.execs.length === 0 &&
+        (/^#\s|^##\s/.test(row.md.trim()));
+      const div = document.createElement("div");
+      const hasExec = row.execs.length > 0;
+      const hasFail = row.execs.some(e => e.status === "fail");
+      div.className = "row" + (hasExec ? "" : (isStructural ? " section" : " preamble")) +
+        (hasFail ? " has-fail" : "");
+
+      const left = document.createElement("div");
+      left.className = "col left";
+      left.innerHTML = `<div class="md">${mdToHtml(row.md)}</div>`;
+      div.appendChild(left);
+
+      if (hasExec || !isStructural) {
+        const right = document.createElement("div");
+        right.className = "col right";
+        if (hasExec) {
+          right.innerHTML = `<div class="col-label">Executed</div>` +
+            row.execs.map(execHtml).join("");
+        } else {
+          right.innerHTML = `<div class="col-label">Executed</div>` +
+            `<div class="empty">No commands run for this step.</div>`;
+        }
+        div.appendChild(right);
+      }
+      main.appendChild(div);
+    });
+
+    addAnchors(main, slug(t.meta.name));
+  }
+
+  function slug(s) {
+    return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  }
+
+  // Octicon "link" — the same glyph GitHub puts next to markdown headings.
+  const LINK_ICON =
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d=' +
+    '"M7.775 3.275a.75.75 0 0 0 1.06 1.06l1.25-1.25a2 2 0 1 1 2.83 2.83l-2.5 2.5a2 2 0 0 1-2.83 0 ' +
+    '.75.75 0 0 0-1.06 1.06 3.5 3.5 0 0 0 4.95 0l2.5-2.5a3.5 3.5 0 0 0-4.95-4.95l-1.25 1.25Zm-4.69 ' +
+    '9.64a2 2 0 0 1 0-2.83l2.5-2.5a2 2 0 0 1 2.83 0 .75.75 0 0 0 1.06-1.06 3.5 3.5 0 0 0-4.95 0l-2.5 ' +
+    '2.5a3.5 3.5 0 0 0 4.95 4.95l1.25-1.25a.75.75 0 0 0-1.06-1.06l-1.25 1.25a2 2 0 0 1-2.83 0Z"></path></svg>';
+
+  // Give every heading a stable slug id (deduplicated the way GitHub does, with
+  // -1/-2 suffixes) and a permalink whose href is "#<tutorial>/<heading>".
+  function addAnchors(container, tutSlug) {
+    const used = new Map();
+    const nodes = container.querySelectorAll(
+      ".tutorial-title, .md h1, .md h2, .md h3, .md h4, .md h5, .md h6"
+    );
+    nodes.forEach(node => {
+      const text = node.textContent.trim();
+      const isTitle = node.classList.contains("tutorial-title");
+      let href = "#" + tutSlug;
+      if (!isTitle) {
+        const base = slug(text) || "section";
+        const n = (used.get(base) || 0) + 1;
+        used.set(base, n);
+        node.id = n > 1 ? base + "-" + n : base;
+        href += "/" + node.id;
+      }
+      node.classList.add("heading-anchored");
+      const a = document.createElement("a");
+      a.className = "anchor";
+      a.href = href;
+      a.title = "Copy link to this section";
+      a.setAttribute("aria-label", "Permalink: " + text);
+      a.innerHTML = LINK_ICON;
+      node.insertBefore(a, node.firstChild);
+    });
+  }
+
+  let toastTimer = null;
+  function toast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("show"), 1600);
+  }
+
+  // navigator.clipboard needs a secure context; reports are often opened over
+  // file://, so fall back to the old execCommand path there.
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(
+        () => toast("Link copied"),
+        () => toast(text)
+      );
+      return;
+    }
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    toast(ok ? "Link copied" : text);
+  }
+
+  function scrollToId(id) {
+    if (!id) { window.scrollTo(0, 0); return; }
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.scrollIntoView({ block: "start" });
+    el.classList.remove("flash");
+    void el.offsetWidth;  // restart the animation on a repeat click
+    el.classList.add("flash");
+  }
+
+  document.addEventListener("click", ev => {
+    const a = ev.target.closest && ev.target.closest("a.anchor");
+    if (!a) return;
+    ev.preventDefault();
+    const href = a.getAttribute("href");
+    copyText(location.href.split("#")[0] + href);
+    if (location.hash === href) scrollToId(a.parentNode.id);
+    else location.hash = href;  // hashchange scrolls
+  });
+
+  // "#<tutorial>" (name, slug, or index) optionally followed by "/<heading>".
+  function parseHash() {
+    const raw = decodeURIComponent(location.hash.replace(/^#/, ""));
+    if (!raw) return { idx: 0, frag: "" };
+    const cut = raw.indexOf("/");
+    const tut = cut >= 0 ? raw.slice(0, cut) : raw;
+    const frag = cut >= 0 ? raw.slice(cut + 1) : "";
+    if (/^\d+$/.test(tut) && +tut < DATA.tutorials.length) return { idx: +tut, frag };
+    const i = DATA.tutorials.findIndex(
+      t => slug(t.meta.name) === tut || t.meta.name === tut
+    );
+    if (i >= 0) return { idx: i, frag };
+    // No tutorial matched: treat a bare hash as a heading in the current one.
+    return { idx: currentIdx >= 0 ? currentIdx : 0, frag: cut >= 0 ? frag : raw };
+  }
+
+  let currentIdx = -1;
+  function show(idx, frag) {
+    if (idx !== currentIdx) {
+      picker.value = idx;
+      render(idx);
+      currentIdx = idx;
+    }
+    if (frag) requestAnimationFrame(() => scrollToId(frag));
+  }
+  picker.addEventListener("change", () => {
+    location.hash = slug(DATA.tutorials[+picker.value].meta.name);
+    show(+picker.value);
+  });
+  window.addEventListener("hashchange", () => {
+    const h = parseHash();
+    show(h.idx, h.frag);
+  });
+  const initial = parseHash();
+  show(initial.idx, initial.frag);
+  // Inlined screenshots have no intrinsic size until decoded, so the first
+  // scroll can land short; re-anchor once everything has loaded.
+  if (initial.frag) {
+    window.addEventListener("load", () => scrollToId(initial.frag), { once: true });
+  }
+</script>
+</body>
+</html>
