@@ -387,12 +387,15 @@ jobs:
     with:
       instance: ${{ matrix.spec }}
       targets: ${{ matrix.targets }}
+      # Basecamp's inspector bundle and test driver at the pinned commit
+      # (basecamp-ui); '{}' for the other legs.
+      extra-targets: ${{ matrix.extra_targets }}
       extra-nix-args: ${{ needs.resolve.outputs.windows_override_inputs }}
       doctest-spec: doctests/${{ matrix.spec }}.test.yaml
       doctest-artifact: reports-windows-x86_64-${{ matrix.spec }}
-      # The probe .lgx must carry a Windows variant. Its Qt imports come from
+      # A probe .lgx must carry a Windows variant. Its Qt imports come from
       # the logosctl bundle, whose own imports the default gate checks.
-      lgx-variant: true
+      lgx-variant: ${{ matrix.lgx_variant }}
 
   # The same for the tutorial: logos-windows-ci cross-builds the tutorial's
   # flake at the pinned commit, with this release set's pins.

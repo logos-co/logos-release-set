@@ -168,6 +168,19 @@
         "type": "github"
       }
     },
+    "lgpm-windows": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791306490,
+        "narHash": "sha256-EZCujuUCR3UtvlvftGoBXhluo/VYmc8gtKH9yKALn+0=",
+        "type": "tarball",
+        "url": "https://github.com/logos-co/logos-package-manager/releases/download/0.3.1/lgpm-x86_64-windows.zip"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://github.com/logos-co/logos-package-manager/releases/download/0.3.1/lgpm-x86_64-windows.zip"
+      }
+    },
     "logos-capability-module": {
       "inputs": {
         "logos-module-builder": "logos-module-builder_2"
@@ -16583,6 +16596,7 @@
     },
     "root": {
       "inputs": {
+        "lgpm-windows": "lgpm-windows",
         "logos-module-builder": "logos-module-builder",
         "logosctl-windows": "logosctl-windows"
       }
