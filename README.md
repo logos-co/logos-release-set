@@ -145,9 +145,9 @@ runs its own HTTP server and, per scrape, calls a metrics convention method on
 each configured module over IPC, merging the results into one document with a
 `module="<name>"` label per series. A module opts in by implementing either
 `collectMetrics()` (structured — `storage_module`) or `collectOpenMetricsText()`
-(already rendered, selected with `"format": "text"` — `delivery_module`).
-`blockchain_module` implements neither, so there the probe carries the metric
-and publishes the block count it observed.
+(already rendered, selected with `"format": "text"` — `delivery_module` and
+`blockchain_module`). The blockchain spec turns the node's metrics on in its
+config before `start`, and also scrapes the block count its probe observed.
 
 **The daemon starts before anything is installed.** `logosctl`'s package
 commands are served by the `package_manager` module inside the running daemon,
