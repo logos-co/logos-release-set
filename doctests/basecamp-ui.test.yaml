@@ -86,7 +86,7 @@ sections:
       - title: "Fetch logosctl and lgpm"
         platform: [linux, macos]
         run: |
-          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logosctl
+          "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-logoscore-cli logosctl &&
           "$RELEASE_SET_DIR/doctests/release-set.sh" fetch logos-package-manager lgpm
         code_block: |
           ./doctests/release-set.sh fetch logos-logoscore-cli logosctl
