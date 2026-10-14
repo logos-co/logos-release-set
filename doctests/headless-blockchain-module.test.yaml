@@ -498,6 +498,27 @@ sections:
       structured kind, and publishes the count of `newBlock` events it received
       from `blockchain_module`.
     steps:
+      - title: "Read the node's metrics directly"
+        text: |
+          A series appears only once the node has recorded something, so this
+          polls for up to a minute. The node's log lines are printed if nothing
+          arrives.
+        run: |
+          for i in $(seq 1 12); do
+            out="$(./bin/logosctl --config-dir ./session call blockchain_module collectOpenMetricsText)"
+            case "$out" in *"# TYPE"*) break ;; esac
+            sleep 5
+          done
+          echo "attempts: $i"
+          printf '%s\n' "$out" | head -c 1500; echo
+          case "$out" in *"# TYPE"*) ;; *)
+            ./bin/logosctl --config-dir ./session call blockchain_module get_cryptarchia_info
+            grep -h -i 'openmetrics\|blockchain_module\|panic\|error' session/logs/*.log | tail -40
+            exit 1 ;;
+          esac
+        code_block: "logosctl call blockchain_module collectOpenMetricsText"
+        expect_contains:
+          - "# TYPE"
       - title: "Load the scraper"
         run: "./bin/logosctl --config-dir ./session module load openmetrics"
         code_block: "logosctl module load openmetrics"
