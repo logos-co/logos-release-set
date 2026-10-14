@@ -509,6 +509,7 @@ sections:
             case "$out" in *"# TYPE"*) break ;; esac
             sleep 5
           done
+          echo "attempts: $i"
           printf '%s\n' "$out" | head -c 1500; echo
           case "$out" in *"# TYPE"*) ;; *)
             ./bin/logosctl --config-dir ./session call blockchain_module get_cryptarchia_info
