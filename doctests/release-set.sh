@@ -199,7 +199,7 @@ cmd_fetch() {
   file="$workdir/$(basename "$url")"
 
   echo "==> $component ($platform): $(basename "$url")"
-  curl -fsSL "$url" -o "$file"
+  curl -fsSL --retry 4 --retry-delay 5 "$url" -o "$file"
 
   case "$file" in
     *.tar.gz|*.tgz) tar -xzf "$file" -C "$workdir" ;;
