@@ -17,9 +17,10 @@ intro: |
 
   A **probe module** built with the pinned `logos-module-builder` then calls the
   module and subscribes to its `newBlock` event. Finally the pinned
-  **`openmetrics`** module is loaded and `/metrics` scraped over HTTP —
-  `blockchain_module` implements neither metrics convention, so the probe
-  publishes the block count it observed and the scrape reads that.
+  **`openmetrics`** module is loaded and `/metrics` scraped over HTTP. One
+  scrape reads two sources: the node's own metrics, which `blockchain_module`
+  renders from `collectOpenMetricsText()`, and the block count the probe
+  observed.
 
   > **On `newBlock`:** it only fires once the node has synced blocks from
   > testnet peers, which depends on network conditions a CI run does not
@@ -32,7 +33,7 @@ what_you_build: "The pinned `blockchain_module`, installed from the catalog, joi
 what_you_learn:
   - How a release set pins tools by release tag and modules by catalog version
   - How to install an exact module version with `logosctl package download --version`
-  - How to generate a node config and start a blockchain node headlessly
+  - How to generate a node config, turn on its metrics, and start a blockchain node headlessly
   - How to query chain state with `get_cryptarchia_info`
   - How to subscribe to a dependency's events from another module
   - Which module serves `/metrics`, and how a module becomes scrapeable
@@ -275,8 +276,8 @@ sections:
             #include "logos_module_context.h"
 
             /// Probes the blockchain_module pinned by the release set: one call
-            /// in, one event subscription out — and a metrics surface so the
-            /// openmetrics module has something to scrape.
+            /// in, one event subscription out — and a metrics surface that
+            /// reports what it observed from the module.
             class ProbeBlockchainImpl : public LogosModuleContext
             {
             public:
@@ -291,11 +292,6 @@ sections:
 
                 /// The convention the openmetrics module scrapes:
                 /// {"metrics": [ {name, type, help, value, labels?}, ... ]}.
-                ///
-                /// blockchain_module implements neither metrics convention, so
-                /// there is nothing to scrape from it directly. The probe
-                /// publishes what it observed *from* it instead, which makes the
-                /// scrape a real end-to-end signal rather than an empty document.
                 LogosMap collectMetrics();
 
             private:
@@ -422,6 +418,17 @@ sections:
         run: './bin/logosctl --config-dir ./session call blockchain_module generate_user_config "$(cat peers.json)"'
         code_block: 'logosctl call blockchain_module generate_user_config "$(cat peers.json)"'
         check_file: "user_config.yaml"
+      - title: "Turn on the node's metrics"
+        text: |
+          The generated config writes `tracing.metrics.enable_open_metrics: false`.
+          The node reads it once at `start`, and while it is off
+          `collectOpenMetricsText()` returns an empty document.
+        run: |
+          sed -i.orig 's/enable_open_metrics: false/enable_open_metrics: true/' user_config.yaml
+          grep -n 'enable_open_metrics' user_config.yaml
+        code_block: "sed -i 's/enable_open_metrics: false/enable_open_metrics: true/' user_config.yaml"
+        expect_contains:
+          - "enable_open_metrics: true"
       - title: "Start the node"
         run: './bin/logosctl --config-dir ./session call blockchain_module start "$(pwd)/user_config.yaml" ""'
         code_block: 'logosctl call blockchain_module start /path/to/user_config.yaml ""'
@@ -485,28 +492,28 @@ sections:
       OpenMetrics document with a `module="<name>"` label injected per series.
 
       A module becomes scrapeable by implementing `collectMetrics()` (structured)
-      or `collectOpenMetricsText()` (already-rendered text). **`blockchain_module`
-      implements neither**, so there is nothing to scrape from it directly —
-      unlike `storage_module` and `delivery_module`, which implement one each.
-      The probe carries the metric instead, publishing the count of `newBlock`
-      events it received from `blockchain_module`. The scrape therefore still
-      proves the whole chain: the endpoint serves, the scraper reaches a module
-      over IPC from its HTTP thread, and the value it returns came from the
-      module under test.
+      or `collectOpenMetricsText()` (already-rendered text). `blockchain_module`
+      is the text kind, like `delivery_module`: it returns the node's own
+      OpenMetrics document, selected with `"format": "text"`. The probe is the
+      structured kind, and publishes the count of `newBlock` events it received
+      from `blockchain_module`.
     steps:
       - title: "Load the scraper"
         run: "./bin/logosctl --config-dir ./session module load openmetrics"
         code_block: "logosctl module load openmetrics"
         expect_contains:
           - "openmetrics"
-      - title: "Point it at the probe"
+      - title: "Point it at the module and the probe"
         file:
           path: openmetrics.json
           language: json
           content: |
             {
               "port": 9466,
-              "modules": ["probe_blockchain"]
+              "modules": [
+                { "name": "blockchain_module", "format": "text" },
+                "probe_blockchain"
+              ]
             }
       - title: "Start the server"
         run: "./bin/logosctl --config-dir ./session call openmetrics start @openmetrics.json"
@@ -520,12 +527,15 @@ sections:
           - '\"running\":true'
       - title: "Scrape /metrics"
         text: |
-          One HTTP request drives a live collection call into the probe from the
-          server thread. A value of `0` is a legitimate result — it means no
-          block arrived inside the window — but the series itself must be there.
+          One HTTP request drives a live collection call into each module from
+          the server thread. Every series from the node carries
+          `module="blockchain_module"`; none appear if its metrics are off. A
+          probe value of `0` is a legitimate result — no block arrived inside the
+          window — but the series itself must be there.
         run: "curl -s --max-time 30 http://127.0.0.1:9466/metrics"
         code_block: "curl http://127.0.0.1:9466/metrics"
         expect_contains:
+          - 'module="blockchain_module"'
           - 'probe_blocks_observed_total{module="probe_blockchain"}'
           - "# EOF"
       - title: "Stop the server"
